@@ -4,7 +4,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var model: LauncherModel!
     private var window: NSWindow?
     private var direct = false
@@ -26,7 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.onExit = { [weak self] status in self?.gameEnded(status) }
         model.load()
-        if !NSEvent.modifierFlags.contains(.option) && model.canSkipWindow {
+        // --updated: the copy an update just installed (Updater.install) shows its window.
+        let updated = CommandLine.arguments.contains("--updated")
+        if !updated && !NSEvent.modifierFlags.contains(.option) && model.canSkipWindow {
             direct = true
             model.play()
         } else {
@@ -56,6 +58,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        model.checkForUpdatesIfDue()
+    }
+
+    @objc func showAbout(_ sender: Any?) { About.show() }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        showWindow()
+        model.checkForUpdatesNow()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.action != #selector(checkForUpdates(_:)) || (model != nil && !model.running && !model.updater.busy)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -76,6 +90,11 @@ MainActor.assumeIsolated {
     let appItem = NSMenuItem()
     menu.addItem(appItem)
     let appMenu = NSMenu()
+    appMenu.addItem(withTitle: "About Bloodborne", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "").target = delegate
+    appMenu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "").target = delegate
+    appMenu.addItem(.separator())
+    appMenu.addItem(withTitle: "Hide Bloodborne", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "Quit Bloodborne", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = appMenu
     app.mainMenu = menu
