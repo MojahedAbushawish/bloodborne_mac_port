@@ -838,6 +838,9 @@ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const st
         } else {
             options.fastMathEnabled = !safe_math;
         }
+        // bbport: positions declared Invariant (the recompiler's default) only match across
+        // shaders with this, as MoltenVK set it (emit_spirv_floating_point.cpp).
+        options.preserveInvariance = msl.find(", invariant]]") != std::string::npos;
         NSError* error = nil;
         id<MTLLibrary> library =
             [device newLibraryWithSource:[NSString stringWithUTF8String:msl.c_str()]
