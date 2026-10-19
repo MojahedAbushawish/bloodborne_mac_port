@@ -6,6 +6,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
+#include "bbport_mouse.h"
 #include "bbport_overlay.h"
 
 namespace Frontend {
@@ -149,7 +150,7 @@ bool WindowSDL::PollEvents() {
             UpdateTextTitle();
             continue;
         }
-        if (BbOverlay::HandleEvent(event)) {
+        if (BbOverlay::HandleEvent(event) || BbMouse::HandleEvent(window, event)) {
             continue;
         }
         switch (event.type) {
@@ -186,6 +187,7 @@ bool WindowSDL::PollEvents() {
             break;
         }
     }
+    BbMouse::Update(window);
     return is_open;
 }
 
