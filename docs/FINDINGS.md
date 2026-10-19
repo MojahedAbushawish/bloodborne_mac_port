@@ -1330,3 +1330,59 @@ process 9.0 GB.
 
 Not measured: the in-game preset switch (Quality -> Performance -> Native AA); the wrapper test
 shows a size change recompiles no pipeline.
+
+## 2026-10-19: M3 Pro measurements, and fixes measured against 0.5.1
+
+MacBook Pro M3 Pro (11 CPU / 14 GPU cores), 18 GB, macOS 15.7.5. A copy of a player's save at
+the lamp in Iosefka's Clinic: camera still, **1594-1595 draws per frame in every window of every
+configuration**, no compiles while measuring; native 1080p, upscaler off, all effects, 60 cap
+(not reached). Each configuration: its own warmed shader cache, scripted input to the level,
+20 s settle, 60 s measured (11 five-second windows), process CPU from OS CPU-time deltas.
+Stock = the 0.5.1 release's GPU library; the game process is the patched one in every
+configuration (the load lock below; without it 0.5.1 can hang loading this save). Stock and
+all-fixes ran twice (31.4/31.3 and 38.1/37.9 FPS); the others once (±0.6%).
+
+| | 0.5.1 | all fixes | change |
+|---|---|---|---|
+| FPS | 31.3 | **38.0** | **+21.2%** |
+| GPU busy, ms per frame | 31.9 | 26.3 | -17.5% |
+| CPU per frame, both processes | 102.7 ms | 80.8 ms | -21.3% |
+| CPU per frame, GPU process | 65.4 ms | 44.5 ms | -32% |
+| GPU command thread per draw | 17.7 us | 5.2 us | -71% |
+| GPU memory allocated | 10.8 GiB | 8.5 GiB | -2.25 GiB |
+
+Each fix switched off alone (all others on):
+
+| Fix | FPS without | gain | also |
+|---|---|---|---|
+| Copy-shader copies deferred to the pass end | 33.7 | **+12.8%** | GPU 29.7 → 26.3 ms |
+| Invariant positions (no NoContraction in vertex stages) | 33.9 | **+12.0%** | GPU 29.5 → 26.3 ms |
+| Draw-pipe sleeping wait | 38.6 | -1.5% | CPU 95.7 → 80.8 ms per frame, GPU process 58.8 → 44.5 |
+| Arena sized from guest memory (5.62 GiB) | 37.7 | +0.6% (noise) | GPU memory -2.4 GiB |
+
+The draw-pipe wait is a CPU and power fix: in this GPU-bound scene the spin reacts slightly
+sooner (a longer spin before sleeping may recover it). The arena no longer changes the frame
+rate on Metal (on 0.4.0/MoltenVK it stopped the texture cache from evicting live textures).
+
+**Deferred copy-shader copies, how they were found:** `BB_GPU_PROFILE=1` gave 26 ms of GPU per
+frame at 100% busy, ~428 encoders; the G-buffer pass ran as ~41 render encoders, the lighting
+pass `4cd21a0f` as ~80. `BB_PASS_STATS=1`: ~31 of ~170 passes per frame reopened the same
+attachments right after a copy-shader copy. A bound (every copy hoisted, wrong image): +6 to
++25% FPS at matched draws. The frame capture's new event trace showed the in-pass copies all
+rewrite the same entries of the constants table `0x70d1ce3b40` (offsets 36432-37296, 0-192)
+and nothing reads them before the pass ends (bindings, constant ring, vertex/index/indirect
+ranges, textures, SRT walker reads, direct-memory shaders, copy sources). Same-session A/B
+(toggle bit 63): screenshots 0.7 s apart switching it on and off differ by 1.88 (mean per
+channel, 0-255), same-setting screenshots 1.4 s apart by 3.10: only motion differs.
+Hunter's Dream (~860 draws): 47.3 → 53.6 FPS, GPU 21.2 → 18.7 ms.
+
+**Loading hang (#18's black loading screen):** a player's save stopped on the loading screen
+in 2 of 2 launches (1 of 2 test loads): "Gnm check: bad packet ... at word 777" at submit, the
+main thread in `0xebb960` under the context lock and the render thread writing from its
+draw-list task `0x219d220` (called virtually after the frame job, not locked). Locked too: 5 of
+5 loads, the lock holding the main thread 1.8-3.8 ms in each (MACOS_BACKLOG load race).
+
+Also: Cmd+W no longer quits (W is "move forward"; Cmd while running repeats it as Cmd+W);
+mouse look; the 1080p R32F refresh's CPU hash skipped; quieter geometry/layer logs; builds
+with the Command Line Tools' macOS 15 SDK (`lodBias` guard; libc++ also needs
+`-D_LIBCPP_ENABLE_EXPERIMENTAL=1` there for `std::jthread`).
