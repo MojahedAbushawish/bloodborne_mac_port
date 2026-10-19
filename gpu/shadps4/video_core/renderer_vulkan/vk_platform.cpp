@@ -227,7 +227,8 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
 
 std::vector<const char*> GetInstanceLayers(bool enable_validation, bool enable_crash_diagnostic) {
     const auto [properties_result, properties] = vk::enumerateInstanceLayerProperties();
-    if (properties_result != vk::Result::eSuccess || properties.empty()) {
+    // No optional layers is valid; only the Vulkan result indicates a failure.
+    if (properties_result != vk::Result::eSuccess) {
         LOG_ERROR(Render_Vulkan, "Failed to query layer properties: {}",
                   vk::to_string(properties_result));
         return {};
