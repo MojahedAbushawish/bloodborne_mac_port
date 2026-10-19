@@ -215,6 +215,12 @@ typedef struct {
      * bench_error says why). */
     uint32_t bench_frame_draws, bench_phase;
     char bench_error[96];
+    /* Mouse look (host window -> the game's pad emulation, runtime_pad.c): the mouse's speed in
+     * points per second over the last ~33 ms, scaled by the sensitivity and the Y inversion
+     * already; buttons as SDL_BUTTON masks; mouse_captured while the window holds the cursor.
+     * Appended last: a host that predates them leaves them zero (no mouse look). */
+    BBGPU_ALIGNAS(BBGPU_CACHE_LINE) int32_t mouse_vx, mouse_vy;
+    uint32_t mouse_buttons, mouse_captured;
 } BbGpuShared;
 
 #define BBGPU_SUBMIT_RING_OFFSET (UINT64_C(64) << 10)
