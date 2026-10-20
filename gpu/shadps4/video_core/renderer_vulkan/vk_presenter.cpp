@@ -10,6 +10,7 @@
 #include "bbport_cpu.h"
 #include "bbport_gpu_capture.h"
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -345,6 +346,22 @@ std::string Presenter::TakeSnapshotRequest() {
     return path.empty() ? snapshot_trigger + ".png" : path;
 }
 
+namespace {
+/// bbport: frame pacing (bbport.ini frame_pacing, default off): the minimum time each frame stays
+/// on screen, the frame cap's period. On variable-refresh displays (ProMotion) frames at a steady
+/// cap otherwise alternate between neighbouring refresh slots (12.5 / 20.8 ms at 60 FPS on a
+/// MacBook Pro); with it they are shown for one period each. It holds frames until their slot:
+/// about one more frame of input latency (measured +23 ms at 60 FPS). Slightly under the period
+/// (97%), so a frame on time is never held back to the next refresh.
+double PacingSeconds() {
+    if (!BbSettings::Get().frame_pacing.load(std::memory_order_relaxed)) {
+        return 0;
+    }
+    const u32 fps = EmulatorSettings.GetFrameLimit();
+    return fps ? 0.97 / fps : 0;
+}
+} // namespace
+
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame, u32) {
     last_present = {NowNs(), 0, 0, 0};
     // nextDrawable and the present passes create autoreleased objects, and this thread
@@ -411,7 +428,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                         std::fflush(stdout);
                     }).detach();
                 }
-            });
+            }, PacingSeconds());
         last_present.submitted = NowNs();
         last_present.presented = last_present.submitted;
     });

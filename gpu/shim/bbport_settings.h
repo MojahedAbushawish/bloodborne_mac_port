@@ -71,6 +71,9 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
+    /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
+    std::atomic<bool> frame_pacing{false};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};
