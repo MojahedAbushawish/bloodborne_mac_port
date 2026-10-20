@@ -73,6 +73,8 @@ struct LayerConfig {
 /// Configures a CAMetalLayer (void* = CAMetalLayer*, e.g. SDL_Metal_GetLayer): device, pixel
 /// format, sRGB colorspace, maximumDrawableCount, displaySyncEnabled, framebufferOnly.
 void ConfigureLayer(Device& device, void* layer, const LayerConfig& config);
+/// maximumDrawableCount (2 or 3) after ConfigureLayer, e.g. when the window enters full screen.
+void SetMaximumDrawables(void* layer, u32 count);
 
 struct Drawable {
     Object drawable;     ///< id<CAMetalDrawable> (retained)
