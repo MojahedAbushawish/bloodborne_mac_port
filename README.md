@@ -241,12 +241,15 @@ a small Python for the launch scripts). Saves and settings go to
 the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use the launcher's
 **Locations** (hold ⌥ while opening the app if the launcher is set not to show).
 
-**Updates.** The launcher checks the GitHub releases once a day when its window opens (not when
-it goes straight into the game) and offers a newer version with its release notes. **Install
+**Updates.** The first time it opens, the app asks whether to check for updates automatically
+(also when the launcher window is turned off, before the game starts). If you agree, the launcher
+checks the GitHub releases once a day when its window opens (not when it goes straight into the
+game) and offers a newer version with its release notes. **Install
 Update** downloads it, checks it (size, SHA-256 from GitHub, bundle identifier, version, code
 signature), replaces `Bloodborne.app` where it is and opens it again; saves and settings are not
 touched. **Bloodborne → Check for Updates…** checks at once; the update window has the
-*Check for updates automatically* and *Include test builds* (`mac-v…-test1` tags) options. The
+*Check for updates automatically* and *Include test builds* (pre-releases and `mac-v…-test1`
+tags) options. The
 app must be somewhere you can write (Applications is fine) and not run from the Downloads quarantine
 location. **Bloodborne → About Bloodborne** shows the version, build and commit.
 

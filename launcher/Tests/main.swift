@@ -259,7 +259,10 @@ do {
     check(ReleaseVersion("dev-0b50589") == nil && ReleaseVersion("") == nil && ReleaseVersion("mac-v") == nil, "no number: no version")
     check(v("0.5.2.1").isNewer(than: v("0.5.2")) && v("0.5.10").isNewer(than: v("0.5.9")) && v("1.0").isNewer(than: v("0.9.9")), "newer")
     check(!v("0.5.2").isNewer(than: v("0.5.2.0")) && !v("0.5.2.0").isNewer(than: v("0.5.2")), "trailing zero is equal")
-    check(!v("0.5.2").isNewer(than: v("0.5.2-5-g0b50589")) && !v("0.5.2-test1").isNewer(than: v("0.5.2")), "suffixes don't count")
+    check(v("0.5.2").isNewer(than: v("0.5.2-test1")) && !v("0.5.2-test1").isNewer(than: v("0.5.2")), "test build before its release")
+    check(v("0.5.2-test2").isNewer(than: v("0.5.2-test1")) && v("0.5.2.1").isNewer(than: v("0.5.2-5-g0b50589")), "test builds in order; next release after a checkout")
+    check(v("0.5.2-5-g0b50589").isNewer(than: v("0.5.2")) && !v("0.5.2").isNewer(than: v("0.5.2-5-g0b50589-dirty")), "checkout build after its tag")
+    check(!v("0.5.2").isNewer(than: v("0.5.2-dirty")) && !v("0.5.2-test1").isNewer(than: v("0.5.2-test1")), "dirty tag build; equal")
 
     func release(_ tag: String, draft: Bool = false, prerelease: Bool = false, asset: String? = nil) -> String {
         let name = asset ?? "Bloodborne-macOS-\(tag.dropFirst(5)).zip"
@@ -271,21 +274,29 @@ do {
         """
     }
     // The API's order: newest published first; 0.5.2 was published after its fix releases.
-    let json = Data(("[" + [release("mac-v0.5.2.2", prerelease: true), release("mac-v0.6.0-test1", prerelease: true),
+    let json = Data(("[" + [release("mac-v0.5.2.2", prerelease: true), release("mac-v0.6.0-test1"),
                             release("mac-v0.7.0", draft: true), release("mac-v0.9.0", asset: "Other.zip"), release("v1.0"),
                             release("mac-v0.5.2"), release("mac-v0.5.2.1", prerelease: true), release("mac-v0.4.0")]
         .joined(separator: ",") + "]").utf8)
+    // Pre-releases (GitHub's flag: 0.5.2.1, 0.5.2.2) and test tags (0.6.0-test1) are test builds.
     let all = (try? Updates.releases(json: json, includeTestBuilds: false)) ?? []
-    check(all.map(\.tag) == ["mac-v0.5.2.2", "mac-v0.5.2.1", "mac-v0.5.2", "mac-v0.4.0"], "stable releases, newest version first: \(all.map(\.tag))")
-    check(all.first?.zip.absoluteString == "https://x/Bloodborne-macOS-0.5.2.2.zip" && all.first?.size == 51225450, "the app's zip, not pkg_extract")
-    check(all.first?.digest == "sha256:ab" && all.first?.title == "mac-v0.5.2.2: notes" && all.first?.notes == "**Fixed** things", "release details")
+    check(all.map(\.tag) == ["mac-v0.5.2", "mac-v0.4.0"], "full releases only, newest version first: \(all.map(\.tag))")
+    check(all.first?.zip.absoluteString == "https://x/Bloodborne-macOS-0.5.2.zip" && all.first?.size == 51225450, "the app's zip, not pkg_extract")
+    check(all.first?.digest == "sha256:ab" && all.first?.title == "mac-v0.5.2: notes" && all.first?.notes == "**Fixed** things", "release details")
+    check(all.allSatisfy { !$0.isTestBuild }, "full releases are not test builds")
     let tests = (try? Updates.releases(json: json, includeTestBuilds: true)) ?? []
-    check(tests.first?.tag == "mac-v0.6.0-test1", "test builds when asked")
-    check((try? Updates.newest(json: json, current: v("0.5.2.1"), includeTestBuilds: false))??.tag == "mac-v0.5.2.2", "newer release offered")
-    check((try? Updates.newest(json: json, current: v("0.5.2.2"), includeTestBuilds: false)) == .some(nil), "up to date")
-    check((try? Updates.newest(json: json, current: v("0.5.2-5-g0b50589"), includeTestBuilds: false))??.tag == "mac-v0.5.2.2", "checkout build gets the next release")
-    check((try? Updates.newest(json: json, current: v("0.5.2"), includeTestBuilds: false, skipping: "0.5.2.2")) == .some(nil), "skipped version")
-    check((try? Updates.newest(json: json, current: nil, includeTestBuilds: false))??.tag == "mac-v0.5.2.2", "dev build: newest release")
+    check(tests.map(\.tag) == ["mac-v0.6.0-test1", "mac-v0.5.2.2", "mac-v0.5.2.1", "mac-v0.5.2", "mac-v0.4.0"], "test builds when asked: \(tests.map(\.tag))")
+    check(tests.prefix(3).allSatisfy(\.isTestBuild), "pre-releases and test tags marked")
+    func newest(_ current: String?, tests: Bool = false, skipping: String? = nil) -> String? {
+        (try? Updates.newest(json: json, current: current.flatMap(ReleaseVersion.init), includeTestBuilds: tests, skipping: skipping))??.tag
+    }
+    check(newest("0.4.0") == "mac-v0.5.2", "newer release offered")
+    check(newest("0.5.2") == nil, "up to date: the 0.5.2.x pre-releases are not offered by default")
+    check(newest("0.5.2", tests: true) == "mac-v0.6.0-test1", "pre-releases and test builds when asked")
+    check(newest("0.5.2-test1") == "mac-v0.5.2", "a test build is offered its release")
+    check(newest("0.5.2-5-g0b50589") == nil && newest("0.5.2-5-g0b50589", tests: true) == "mac-v0.6.0-test1", "checkout build: only later releases")
+    check(newest("0.4.0", skipping: "0.5.2") == nil, "skipped version")
+    check(newest(nil) == "mac-v0.5.2", "dev build: newest release")
     check((try? Updates.releases(json: Data("{\"message\":\"rate limited\"}".utf8), includeTestBuilds: false)) == nil, "API error is an error")
 
     let now = Date(timeIntervalSince1970: 2_000_000_000)
@@ -311,18 +322,20 @@ do {
     // launch.conf keeps the update preferences.
     var conf = IniFile(text: "BB_GAME_DIR=/g\n")
     var config = LaunchConfig(ini: conf)
-    check(config.checkUpdates && !config.testBuilds && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
+    check(config.checkUpdates == nil && !config.testBuilds && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
     config.checkUpdates = false
     config.testBuilds = true
     config.skippedVersion = "0.5.2.2"
     config.lastUpdateCheck = now
     config.apply(to: &conf)
-    check(LaunchConfig(ini: conf) == config, "update preferences round trip")
+    check(LaunchConfig(ini: conf) == config && LaunchConfig(ini: conf).checkUpdates == false, "update preferences round trip")
     check(conf["BB_UPDATE_CHECKED"] == "2000000000" && conf["BB_CHECK_UPDATES"] == "0", "update keys written")
     config.testBuilds = false
     config.skippedVersion = nil
+    config.checkUpdates = nil
     config.apply(to: &conf)
-    check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_SKIP"] == nil, "defaults leave no key")
+    check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
+    check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
 }
 
 if failures > 0 {

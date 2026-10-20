@@ -3,8 +3,9 @@ import Foundation
 
 /// A version of the port: the dotted numbers of a release tag (mac-v0.5.2.2 -> 0.5.2.2) and what
 /// follows them ("-test1" for a test build, "-5-g0b50589" for a build from a checkout).
-/// Only the numbers decide what is newer: a checkout build sits on the release it follows, so it
-/// is offered the next numbered release, never a reinstall of its own.
+/// With equal numbers, a test build comes before the release (0.5.2-test1 < 0.5.2) and a checkout
+/// build after the tag it follows (0.5.2 < 0.5.2-5-g0b50589), so a checkout is never offered a
+/// reinstall of its own release.
 struct ReleaseVersion: Equatable, CustomStringConvertible {
     let numbers: [Int]
     /// "" for a plain numbered release.
@@ -27,11 +28,21 @@ struct ReleaseVersion: Equatable, CustomStringConvertible {
     var isPlain: Bool { suffix.isEmpty }
     var description: String { text }
 
+    /// Order among versions with the same numbers: (-1, n) a test build ("-test<n>", "-rc<n>"),
+    /// (0, 0) the release, (1, n) n commits after the tag (git describe: "-<n>-g<hash>[-dirty]").
+    private var suffixRank: (Int, Int) {
+        if suffix.isEmpty { return (0, 0) }
+        let parts = suffix.dropFirst().split(separator: "-")
+        if let n = parts.first.flatMap({ Int($0) }), parts.count >= 2, parts[1].hasPrefix("g") { return (1, n) }
+        if parts == ["dirty"] { return (1, 0) }
+        return (-1, Int(suffix.reversed().prefix { $0.isNumber }.reversed().map(String.init).joined()) ?? 0)
+    }
+
     func isNewer(than other: ReleaseVersion) -> Bool {
         for i in 0..<max(numbers.count, other.numbers.count) {
             let a = i < numbers.count ? numbers[i] : 0, b = i < other.numbers.count ? other.numbers[i] : 0
             if a != b { return a > b }
         }
-        return false
+        return suffixRank > other.suffixRank
     }
 }

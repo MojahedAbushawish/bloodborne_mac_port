@@ -27,10 +27,10 @@ struct UpdateView: View {
             content
             Divider()
             Toggle("Check for updates automatically", isOn: Binding(
-                get: { model.config.checkUpdates }, set: { model.setUpdatePreference(automatic: $0) }))
+                get: { model.config.checkUpdates == true }, set: { model.setUpdatePreference(automatic: $0) }))
             Toggle("Include test builds", isOn: Binding(
                 get: { model.config.testBuilds }, set: { model.setUpdatePreference(testBuilds: $0) }))
-                .help("Also offer releases tagged as tests (mac-v0.5.2-test1): early fixes that may not be finished.")
+                .help("Also offer pre-releases and test builds: early fixes that may not be finished.")
             buttons
         }
         .padding(20)

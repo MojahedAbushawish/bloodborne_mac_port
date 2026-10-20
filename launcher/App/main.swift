@@ -27,8 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onExit = { [weak self] status in self?.gameEnded(status) }
         model.load()
         // --updated: the copy an update just installed (Updater.install) shows its window.
-        let updated = CommandLine.arguments.contains("--updated")
-        if !updated && !NSEvent.modifierFlags.contains(.option) && model.canSkipWindow {
+        // (⌥ is read before the update question, which may be answered after letting go of it.)
+        let wantsWindow = CommandLine.arguments.contains("--updated") || NSEvent.modifierFlags.contains(.option)
+        // Asked before the game too: players who turned the window off would never see it.
+        model.askAboutUpdatesIfNeeded()
+        if !wantsWindow && model.canSkipWindow {
             direct = true
             model.play()
         } else {

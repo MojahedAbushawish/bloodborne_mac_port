@@ -239,10 +239,24 @@ final class LauncherModel: ObservableObject {
 
     /// When the launcher window shows (not on the way straight into the game): one check a day.
     func checkForUpdatesIfDue() {
-        guard config.checkUpdates, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
+        guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
         config.lastUpdateCheck = Date()
         save()
         Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: config.skippedVersion, manual: false) }
+    }
+
+    /// Automatic checks are off until the player agrees: asked once, at the first start with the
+    /// updater, before the launcher window or the game (also when the window is turned off).
+    func askAboutUpdatesIfNeeded() {
+        guard config.checkUpdates == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Check for updates automatically?"
+        alert.informativeText = "Bloodborne can look for a new version of this port on its GitHub releases page once a day, when the launcher opens. Nothing is downloaded or installed without asking you. You can change this in the update window (Bloodborne → Check for Updates…), which works either way."
+        alert.addButton(withTitle: "Check Automatically")
+        alert.addButton(withTitle: "Don't Check")
+        NSApp.activate()
+        config.checkUpdates = alert.runModal() == .alertFirstButtonReturn
+        save()
     }
 
     /// The app menu's Check for Updates….

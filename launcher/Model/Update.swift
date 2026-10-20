@@ -12,6 +12,8 @@ struct ReleaseUpdate: Equatable {
     var size: Int64
     /// "sha256:<hex>" when GitHub recorded one.
     var digest: String?
+    /// A pre-release on GitHub or a test tag (mac-v0.5.2-test1): offered only with "Include test builds".
+    var isTestBuild = false
 }
 
 /// Update checks against the repository's GitHub releases (launcher/App/Updater.swift does the
@@ -41,26 +43,28 @@ enum Updates {
         var name: String?
         var body: String?
         var draft: Bool?
+        var prerelease: Bool?
         var htmlUrl: URL
         var assets: [Asset]
     }
 
     /// The API's releases newest version first, without drafts, tags that are not
-    /// mac-v<numbers>, releases without the app's zip and (unless asked for) test builds.
-    /// GitHub's "prerelease" flag is not used: CI sets it on numbered fix releases (0.5.2.1)
-    /// too, so a test build is known by its tag (mac-v0.5.2-test1).
+    /// mac-v<numbers>, releases without the app's zip and (unless asked for) test builds: GitHub
+    /// pre-releases (each release is published as full or pre-release on purpose) and test tags.
     static func releases(json: Data, includeTestBuilds: Bool) throws -> [ReleaseUpdate] {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let found = try decoder.decode([Payload].self, from: json).compactMap { r -> ReleaseUpdate? in
-            guard r.draft != true, r.tagName.hasPrefix("mac-v"), let version = ReleaseVersion(r.tagName),
-                  includeTestBuilds || version.isPlain,
+            guard r.draft != true, r.tagName.hasPrefix("mac-v"), let version = ReleaseVersion(r.tagName) else { return nil }
+            let isTestBuild = r.prerelease == true || !version.isPlain
+            guard includeTestBuilds || !isTestBuild,
                   let asset = r.assets.first(where: {
                       $0.name.hasPrefix("Bloodborne-macOS-") && $0.name.hasSuffix(".zip") && ($0.state ?? "uploaded") == "uploaded"
                   }) else { return nil }
             let title = r.name.flatMap { $0.isEmpty ? nil : $0 } ?? r.tagName
             return ReleaseUpdate(version: version, tag: r.tagName, title: title, notes: r.body ?? "",
-                                 page: r.htmlUrl, zip: asset.browserDownloadUrl, size: asset.size, digest: asset.digest)
+                                 page: r.htmlUrl, zip: asset.browserDownloadUrl, size: asset.size, digest: asset.digest,
+                                 isTestBuild: isTestBuild)
         }
         // Newest version first; equal versions keep the API's order (newest published first).
         return found.enumerated().sorted { a, b in
