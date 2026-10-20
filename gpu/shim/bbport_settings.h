@@ -71,6 +71,9 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
+    /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
+    std::atomic<bool> frame_pacing{false};
     /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
     std::atomic<bool> mouse_look{true};
     std::atomic<float> mouse_sensitivity{1.0f};

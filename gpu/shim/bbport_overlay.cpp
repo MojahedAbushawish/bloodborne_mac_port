@@ -788,6 +788,13 @@ void DisplayTab(BbSettings::Values& s) {
     HintBelow("Size of the final frame and HUD.");
     EndCard();
 
+    BeginCard("Frame pacing");
+    Toggle("Even frame times", s.frame_pacing);
+    HintBelow("Shows each frame for one period of the FPS cap. Smoother camera motion on "
+              "ProMotion displays when the game holds the cap, but about one frame more input "
+              "lag. No effect below the cap.");
+    EndCard();
+
     BeginCard("Overlay");
     Toggle("FPS counter in corner", s.show_fps);
     EndCard();
