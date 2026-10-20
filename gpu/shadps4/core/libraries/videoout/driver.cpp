@@ -804,6 +804,12 @@ void VideoOutDriver::Flip(const Request& req) {
                         static_cast<unsigned long long>(BbStats::gc_freed_images.load()),
                         static_cast<unsigned long long>(archive_hits),
                         static_cast<unsigned long long>(compiled));
+            // bbport: lazy texture usages (VideoCore::Image::allowed_shader_write).
+            if (const u64 upgrades = BbStats::texture_upgrades.exchange(0)) {
+                std::printf("Texture usage upgrades: %llu (%.1f MB copied)\n",
+                            static_cast<unsigned long long>(upgrades),
+                            BbStats::texture_upgrade_bytes.exchange(0) / 1e6);
+            }
             // Frame timeline: where each frame's time goes on the GPU side (ms per frame).
             if (frames) {
                 const auto per_frame = [&](std::atomic<u64>& total) {

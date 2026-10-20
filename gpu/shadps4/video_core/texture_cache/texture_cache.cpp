@@ -243,6 +243,8 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
         new_info.UpdateSize();
         const auto new_image_id = slot_images.insert(device, runtime, slot_image_views, new_info);
+        // bbport: the replacement keeps the lazy usages the old image got.
+        slot_images[new_image_id].ApplyNewUsage(slot_images[cache_image_id].CurrentUsage());
         RegisterImage(new_image_id);
 
         // Inherit image usage
@@ -494,6 +496,9 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
 ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     const auto new_image_id = slot_images.insert(device, runtime, slot_image_views, info);
+    // bbport: the larger image keeps the lazy usages the old one got (the game grows mip
+    // chains one level at a time).
+    slot_images[new_image_id].ApplyNewUsage(slot_images[image_id].CurrentUsage());
     RegisterImage(new_image_id);
 
     auto& src_image = slot_images[image_id];
@@ -617,6 +622,10 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     // Create and register a new image
     if (!image_id) {
         image_id = slot_images.insert(device, runtime, slot_image_views, info);
+        // bbport: the creating binding's lazy usages from the start (a texture first bound as
+        // storage, or in another pixel format), instead of an upgrade copy at its first view.
+        auto& created = slot_images[image_id];
+        created.ApplyNewUsage(created.NeededUsage(desc.view_info));
         RegisterImage(image_id);
     }
 
