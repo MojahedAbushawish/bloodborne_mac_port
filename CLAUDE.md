@@ -146,7 +146,8 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   `open -n --env BB_DATA_DIR=$PWD/out/macdata --env BB_LAUNCH_CONF=$PWD/out/macdata/launch.conf Bloodborne.app`.
 - **About + updates (2026-10-20):** app menu *About Bloodborne* (standard panel; Info.plist
   `CFBundleVersion` from `git describe`, `BBCommit`) and *Check for Updates…*; daily automatic
-  check of GitHub releases when the launcher window shows, only after the player agreed (asked
+  check of GitHub releases when the launcher window shows (window off: started with the game, a
+  found update shows after it instead of quitting), only after the player agreed (asked
   once at start, before the game too; `launcher/Model/Update.swift`, `launcher/App/Updater.swift`;
   launch.conf `BB_CHECK_UPDATES` absent = not asked, `BB_UPDATE_TEST_BUILDS`, `BB_UPDATE_SKIP`,
   `BB_UPDATE_CHECKED`). Test builds = GitHub pre-releases and `-test` tags; 0.5.2-test1 < 0.5.2 <

@@ -243,8 +243,9 @@ the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use 
 
 **Updates.** The first time it opens, the app asks whether to check for updates automatically
 (also when the launcher window is turned off, before the game starts). If you agree, the launcher
-checks the GitHub releases once a day when its window opens (not when it goes straight into the
-game) and offers a newer version with its release notes. **Install
+checks the GitHub releases once a day and offers a newer version with its release notes: when its
+window opens, or, with the window turned off, in the background while you play, showing the update
+after the game ends. **Install
 Update** downloads it, checks it (size, SHA-256 from GitHub, bundle identifier, version, code
 signature), replaces `Bloodborne.app` where it is and opens it again; saves and settings are not
 touched. **Bloodborne → Check for Updates…** checks at once; the update window has the

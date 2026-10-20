@@ -237,7 +237,8 @@ final class LauncherModel: ObservableObject {
         NSWorkspace.shared.open(crashReport.issueURL)
     }
 
-    /// When the launcher window shows (not on the way straight into the game): one check a day.
+    /// One check a day, silent unless it finds an update: when the launcher window shows, or as
+    /// the game starts when the window is turned off (main.swift shows the result after the game).
     func checkForUpdatesIfDue() {
         guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
         config.lastUpdateCheck = Date()

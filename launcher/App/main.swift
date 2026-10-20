@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.askAboutUpdatesIfNeeded()
         if !wantsWindow && model.canSkipWindow {
             direct = true
+            // The daily check runs in the background while the game plays (started here, not
+            // later: its save() must not rewrite bbport.ini while the game's menu may change it).
+            model.checkForUpdatesIfDue()
             model.play()
         } else {
             showWindow()
@@ -41,8 +44,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func gameEnded(_ status: Int32) {
         if direct && status == 0 {
-            NSApp.terminate(nil)
-            return
+            // With the window turned off, an update the check found shows once, after the session.
+            guard model.updater.available != nil else {
+                NSApp.terminate(nil)
+                return
+            }
+        } else if status != 0 {
+            // The crash report comes first; the footer still links the update.
+            model.updater.showing = false
         }
         direct = false
         showWindow()
