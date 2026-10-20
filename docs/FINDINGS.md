@@ -1406,6 +1406,70 @@ GPU-process CPU from `top`:
   swings between sessions, so only alternating runs compare.
 - Taken onto master (authorship kept) for 0.5.3.
 
+## Lossless texture compression and frame pacing on an M3 Pro (2026-10-20)
+
+**Compression.** Metal compresses private textures losslessly only when they are created without
+`MTLTextureUsageShaderWrite` and `MTLTextureUsagePixelFormatView`. Every non-BC image had both, so
+nothing was compressed. On the M3 Pro (150 GB/s, a third of the M4 Max) that is the largest
+cost of the frame.
+- **The bound:** creating textures without the two usages gave +22% at the clinic, but the scene
+  turned red: some images are written by compute or read in another pixel format.
+- **Lazy usages:** images get both usages, once, when a binding needs one (storage, another pixel
+  format, a stencil view). The texture is re-created and its contents copied.
+
+Which views need PixelFormatView (Metal API validation, 64×64 test textures):
+
+| View | Needs PixelFormatView? |
+|---|---|
+| sRGB ↔ linear, swizzles, level and layer ranges | no |
+| reinterpreting formats (RGBA8 → R32Uint), RGBA ↔ BGRA, stencil views of depth | yes |
+
+M3 Pro 18 GB, macOS 15.7, `m3pro-fixes-v1` (0.5.1 + PR #20) against the same plus this change,
+alternating, warm caches, 60 s each:
+
+| Scene | Before | After | GPU ms/frame | CPU ms/frame | CPU % (uncapped) |
+|---|---|---|---|---|---|
+| Iosefka's Clinic lamp, 1080p (2 runs) | 37.6 | **44.3 (+17.8%)** | 26.5 → 22.4 | 82.2 → 77.4 | 309 → 343 |
+| Hunter's Dream, 1080p uncapped (2) | 49.7 | **62.2 (+25.2%)** | 20.0 → 15.9 | 57.5 → 53.8 | 286 → 335 |
+| Hunter's Dream, 1440p live (2) | 28.5 | **40.2 (+41%)** | 35.0 → 24.8 | 68.3 → 56.5 | 195 → 227 |
+
+CPU % rises only because more frames are drawn per second; CPU time per frame falls.
+
+Images are within run-to-run differences:
+
+| Scene | After vs before | Two unchanged runs |
+|---|---|---|
+| Clinic | 1.3–1.4 | 1.1 |
+| Hunter's Dream 1080p | 6.9–7.7 | 5.7 |
+| Hunter's Dream 1440p | 6.3–6.5 | 5.4 |
+
+Most upgrades happen at load. In play, area loads add a few dozen, which the frame stats report as
+`Texture usage upgrades: N (M MB copied)`. Metal API validation (`MTL_DEBUG_LAYER=1`) passes at the
+clinic and at 1440p.
+
+Two bugs were found before the PR:
+- **Wrong colours on streamed textures.** The game writes RGBA8 uint by compute and samples it as
+  unorm/sRGB. When a dispatch bound the image for writing and a later binding of the same dispatch
+  upgraded it, that dispatch wrote the replaced texture, leaving garbage mips (purple or noisy
+  enemies). Now every binding of a stage is upgraded before any binding takes a texture, and an
+  upgrade gives both usages.
+- **A stencil view without PixelFormatView.** The 1440p depth resample created one, caught by
+  validation. Its source and proxy are now upgraded first.
+
+**Frame pacing.** On the ProMotion panel a steady 60 FPS cap showed frames for 12.5 / 20.8 ms
+alternately, although they were delivered every 16.7 ms, even with the GPU idle (title screen).
+Per-frame display times came from `presentedHandler`.
+`presentDrawable:afterMinimumDuration:` (97% of the cap's period) evens it out:
+
+| Hunter's Dream 1080p, 60 cap | Off | On |
+|---|---|---|
+| Consecutive frames shown for different times | 97% | 4% |
+| Frames shown 16.7 ms | ~40% | 98% |
+| Late frames/min | 84 | 30 |
+| Game flip → on screen (median) | 39.7 ms | **63.4 ms** |
+
+It costs about a frame of input latency, so it is a menu toggle (`frame_pacing`), off by default.
+
 ## Full screen in the background harness (2026-10-20)
 
 Full screen (`fullscreen=1`, MetalFX 1440p, 60 cap, app not focused): 59.5-59.8 FPS with 30-40
