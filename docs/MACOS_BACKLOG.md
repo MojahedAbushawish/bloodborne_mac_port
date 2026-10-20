@@ -644,6 +644,25 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **PGO on macOS:** profile-guided optimization is off (the profiles are GCC `.gcda`).
   *Refinement:* clang `-fprofile-generate`/`-fprofile-use` with `.profdata`.
 
+### Measured on an M3 Pro, not done (2026-10-20)
+
+- **Tessellated light volumes split the deferred lighting pass.** 73 of ~87 tessellated draws per
+  frame at the clinic are light volumes in the lighting pass (2× R11G11B10 + D32S8, 477 draws), in
+  43 runs. Each run's vertex/control kernels end the render encoder and reopen it: 82 reopens per
+  frame. An empty split costs ~0.05 ms there (48 extra splits: +2.3 ms GPU), so the splits are
+  ~4 ms of a 22 ms frame. Skipping the tessellated draws (wrong image) gave +22.5% at the clinic,
+  +7% in Hunter's Dream. Fix idea: encode a pass's tessellation kernels before its render encoder
+  (buffer the pass's draws as `Runs` does for patch draws).
+- **Area loads stall the renderer.** Entering new parts of Central Yharnam creates 400–700
+  textures in one frame (130–230 MB) and waits on the host copy threads: 100–300 ms frames.
+  Spread the creation and uploads over frames, or use worker threads.
+- **Write faults cost the game ~19% of its time in the city.** That is 1,300–2,500 faults/s at
+  ~150 µs each: four thread wake-ups across the processes per fault, while the renderer's own
+  handling takes ~40 µs. Read-backs of GPU data wait ~10 ms each for the GPU thread. A game-side fast
+  path (unprotect locally, apply the invalidation later) was tried and dropped: its 256 KB window
+  also covered GPU-written images, whose texture invalidation re-uploaded stale guest memory over
+  them. A correct one must leave texture-watched pages to the renderer.
+
 ## 3. Mac GUI
 
 - **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
