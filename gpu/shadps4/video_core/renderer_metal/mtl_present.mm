@@ -141,6 +141,10 @@ void ConfigureLayer(Device& device, void* layer, const LayerConfig& config) {
     l.framebufferOnly = config.framebuffer_only;
 }
 
+void SetMaximumDrawables(void* layer, u32 count) {
+    ((__bridge CAMetalLayer*)layer).maximumDrawableCount = count;
+}
+
 Drawable NextDrawable(void* layer) {
     id<CAMetalDrawable> drawable = [(__bridge CAMetalLayer*)layer nextDrawable];
     if (drawable == nil) {

@@ -115,6 +115,7 @@ void WindowSDL::UpdateVisible() {
     // NSWindow's occlusionState, OCCLUDED/EXPOSED).
     const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
     const bool now = !(flags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED));
+    fullscreen.store((flags & SDL_WINDOW_FULLSCREEN) != 0, std::memory_order_relaxed);
     if (now != visible.exchange(now, std::memory_order_relaxed)) {
         std::printf("Window: %s\n", now ? "visible: presenting"
                                          : "minimised, hidden or occluded: frames not presented");
@@ -183,6 +184,8 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_SHOWN:
         case SDL_EVENT_WINDOW_OCCLUDED:
         case SDL_EVENT_WINDOW_EXPOSED:
+        case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+        case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             UpdateVisible();
             break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
