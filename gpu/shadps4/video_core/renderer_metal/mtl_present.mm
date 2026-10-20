@@ -279,9 +279,12 @@ void PresentQueue::WaitForDeviceTick(void* command_buffer, u64 device_tick) {
 }
 
 void PresentQueue::Commit(void* command_buffer, void* drawable,
-                          std::function<void()> on_complete) {
+                          std::function<void()> on_complete, double min_duration) {
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)command_buffer;
-    if (drawable != nullptr) {
+    if (drawable != nullptr && min_duration > 0) {
+        [cmd presentDrawable:(__bridge id<CAMetalDrawable>)drawable
+            afterMinimumDuration:min_duration];
+    } else if (drawable != nullptr) {
         [cmd presentDrawable:(__bridge id<CAMetalDrawable>)drawable];
     }
     {
