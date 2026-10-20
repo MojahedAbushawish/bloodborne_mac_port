@@ -1579,6 +1579,10 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
             image_id = depth_image_id;
             image = &texture_cache.GetImage(image_id);
         }
+        // bbport: a lazy usage upgrade (Runtime::UpgradeUsage) runs on the GPU thread.
+        if (image->NeededUsage(entry.desc.view_info) != 0) {
+            return false;
+        }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) ||
             (upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
@@ -2482,6 +2486,21 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
+    }
+
+    // bbport: a lazy usage upgrade replaces the image's texture. Every binding of this stage gets
+    // its upgrade before any binding takes a texture: a dispatch that writes one mip and reads
+    // another in a second pixel format must not write the replaced texture.
+    if (!on_helper) {
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (!image_id) {
+                continue;
+            }
+            auto& image = texture_cache.GetImage(image_id);
+            if (const u32 needed = image.NeededUsage(desc_ptr->view_info)) {
+                runtime.UpgradeUsage(&image, needed);
+            }
+        }
     }
 
     // Second pass to re-bind images that were updated after binding

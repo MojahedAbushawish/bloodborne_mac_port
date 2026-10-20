@@ -109,6 +109,9 @@ inline std::atomic<std::uint64_t> deferred_shader_copies{0}, deferred_copy_confl
 /// render passes, and the others), and uploads not hoisted because their ranges were in use by
 /// a submission in flight.
 inline std::atomic<std::uint64_t> arena_barriers{0}, arena_other_barriers{0}, hoists_in_flight{0};
+/// bbport: texture usage upgrades (Runtime::UpgradeUsage: lazy ShaderWrite/PixelFormatView) and
+/// the bytes of the textures they copied.
+inline std::atomic<std::uint64_t> texture_upgrades{0}, texture_upgrade_bytes{0};
 /// bbport: ordering fence waits encoded at encoder opens, those encoders, and the most on one
 /// encoder (Metal::OrderTracker::TakeWaitStats).
 inline std::atomic<std::uint64_t> order_waits{0}, order_encoders{0}, order_max_waits{0};
