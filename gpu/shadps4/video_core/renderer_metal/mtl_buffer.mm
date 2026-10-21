@@ -66,8 +66,13 @@ id<MTLBuffer> NewLazyBuffer(id<MTLDevice> mtl_device, const Device& device, u64 
     return buffer;
 }
 
-constexpr u64 WindowStep = u64{2} << 30;
-constexpr u64 WindowSize = u64{4} << 30;
+/// Windows start every 512 MiB and are 1 GiB long: a range of up to 512 MiB (indices, indirect
+/// arguments) fits in the window of its start. Metal counts a window's length as allocated
+/// (currentAllocatedSize, the Metal HUD), though it adds no memory: windows are small, and made
+/// only for offsets near and above 4 GiB.
+constexpr u64 WindowStep = u64{512} << 20;
+constexpr u64 WindowSize = u64{1} << 30;
+constexpr u64 FirstWindowed = (u64{4} << 30) - WindowStep;
 /// The key of a buffer's windows (an NSMutableDictionary: window index -> id<MTLBuffer>).
 char windows_key;
 
@@ -78,7 +83,7 @@ bool CanLowerOffsets(void* buffer) {
 }
 
 BufferRef LowOffset(BufferRef ref) {
-    if (ref.offset < WindowStep || !CanLowerOffsets(ref.buffer)) {
+    if (ref.offset < FirstWindowed || !CanLowerOffsets(ref.buffer)) {
         return ref;
     }
     id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)ref.buffer;
@@ -104,17 +109,17 @@ BufferRef LowOffset(BufferRef ref) {
                 static bool logged = false;
                 if (!logged) {
                     logged = true;
-                    std::fprintf(stderr, "Metal: no window at %llu GiB of %s; offset kept\n",
-                                 static_cast<unsigned long long>(start >> 30),
+                    std::fprintf(stderr, "Metal: no window at %llu MiB of %s; offset kept\n",
+                                 static_cast<unsigned long long>(start >> 20),
                                  buffer.label.UTF8String ?: "a buffer");
                 }
                 return ref;
             }
-            window.label = [NSString stringWithFormat:@"%@ window %llu GiB", buffer.label ?: @"",
-                                                      static_cast<unsigned long long>(start >> 30)];
+            window.label = [NSString stringWithFormat:@"%@ window %llu MiB", buffer.label ?: @"",
+                                                      static_cast<unsigned long long>(start >> 20)];
             windows[@(index)] = window;
-            std::printf("Metal: window at %llu GiB of %s (32-bit index/indirect offsets)\n",
-                        static_cast<unsigned long long>(start >> 30),
+            std::printf("Metal: window at %llu MiB of %s (32-bit index/indirect offsets)\n",
+                        static_cast<unsigned long long>(start >> 20),
                         buffer.label.UTF8String ?: "a buffer");
         }
     }
