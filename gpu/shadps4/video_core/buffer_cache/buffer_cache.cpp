@@ -20,6 +20,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
+#include "video_core/renderer_metal/mtl_buffer.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -388,6 +389,31 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         runtime.NoteSubmissionUse(arena, arena->Offset(device_addr), size);
     }
     return {arena, arena->Offset(device_addr)};
+}
+
+std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, u32 size) {
+    const auto [buffer, offset] = ObtainBuffer(device_addr, size, false);
+    constexpr u64 IndexOffsetLimit = u64{1} << 32;
+    if (offset < IndexOffsetLimit && size <= IndexOffsetLimit - offset) {
+        return {buffer, offset};
+    }
+    // bbport: the encoder draws through a window of the arena at a low offset (Metal::LowOffset),
+    // without a copy, when the arena has CPU contents (BB_ARENA_LAZY, the default).
+    if (Metal::CanLowerOffsets(buffer->Ref().buffer)) {
+        return {buffer, offset};
+    }
+    // The bytes in the arena are correct, but drawIndexedPrimitives fetches from the
+    // wrapped offset (reproduced on M2). Small indices already use the stream buffer;
+    // this is why a prop's details can draw while its larger body disappears.
+    if (!IsRegionGpuModified(device_addr, size)) {
+        return ObtainBufferForImage(device_addr, size);
+    }
+    // A CPU copy would discard GPU-produced indices. Copy in command order instead,
+    // using the staging pool's retirement ticks to keep the range alive through the draw.
+    const auto staging = staging_pool.Request(size, MemoryType::DeviceLocal, 16);
+    const BufferCopy copy{offset, staging.offset, size};
+    runtime.CopyBuffer(*buffer, *staging.buffer, std::span{&copy, 1});
+    return {staging.buffer, staging.offset};
 }
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_addr, u32 size) {
