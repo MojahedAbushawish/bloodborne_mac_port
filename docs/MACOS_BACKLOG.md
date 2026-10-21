@@ -527,6 +527,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   hoist the remaining copies; (2) put consecutive dispatches in one compute encoder; (3) the 47
   tessellated draws per frame each split a pass (MoltenVK's emulation): batch them or emulate
   tessellation ourselves; (4) attachment-less vertex-only passes (~20/frame) folded together.
+  *(3) done on Metal (2026-10-21, FINDINGS "Tessellation runs hold plain draws"):* plain draws
+  wait in tessellation runs; the clinic's lighting pass reopened 82 → ~7 times per frame (+14%
+  on an M3 Pro). Left: one reopen per run whose pass drew before its first tessellated draw
+  (hoist the kernels to the pass start).
   *0.5.3 plan (2026-10-18):* the counts above are from MoltenVK; first re-measure encoders and
   render passes per frame on the native Metal renderer (Metal System Trace, 1080p and 1440p
   native) and list which splits are avoidable (a pass reading what the previous one wrote must
