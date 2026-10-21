@@ -1523,3 +1523,9 @@ compiled during the walk, the archive wrote 9 times (writes now spaced to 20x th
 the earlier cold walk wrote 15 times), 60 FPS mean, 14 game-side spikes in the minute entering
 the area and 5 visible ones (late flip or present) over the remaining 9 minutes. A one-time cost
 per player; the next start preloads.
+
+**Frames ahead near the GPU limit.** Dream at 3456x1944 native, 60 cap (GPU busy 15.2-15.5
+ms/frame), `BB_FRAMES_AHEAD` 1 (default) vs 2, two runs each: with 1, pacing stddev 0.01 ms and
+worst frame 16.7 ms standing and turning in every run; with 2, turning had worst frames of 31-33
+ms and stddev 1.1-1.5 ms. More frames ahead does not absorb heavy frames here, it bunches them;
+the default stays 1.
