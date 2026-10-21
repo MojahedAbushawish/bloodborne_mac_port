@@ -152,6 +152,14 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   launch.conf `BB_CHECK_UPDATES` absent = not asked, `BB_UPDATE_TEST_BUILDS`, `BB_UPDATE_SKIP`,
   `BB_UPDATE_CHECKED`). Test builds = GitHub pre-releases and `-test` tags; 0.5.2-test1 < 0.5.2 <
   0.5.2-5-g…. Release apps replace themselves in place; checkout apps only notify.
+- **Session logs (2026-10-22):** the launcher pipes the game's output through
+  `launcher/App/SessionLogWriter.swift` (`launcher/Model/SessionLog.swift`): per session
+  `~/Library/Logs/Bloodborne/game-<start>.log` (ISO 8601 time + syslog severity + the raw line) and
+  `.jsonl` (ECS-style fields for Loki/ELK), last 20 kept, `game.log`/`game.previous.log` are links;
+  also unified logging (subsystem `io.github.wooloomooloo2.bloodborne-mac-port`, category = source;
+  zsh's builtin `log` shadows `/usr/bin/log`). Severity comes from the line (`Crash:` critical,
+  `STOP:`/`ERROR:` error, GPU `<Warning>`...). The writer must hold the `Pipe` until the end:
+  released, it closes the read end and a still-writing bbgpu-host dies of SIGPIPE.
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 
 ## State as of 2026-10-21 (after 0.5.3, local master, not pushed)
