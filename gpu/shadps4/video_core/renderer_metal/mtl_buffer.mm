@@ -86,9 +86,25 @@ BufferRef LowOffset(BufferRef ref) {
     if (ref.offset < FirstWindowed || !CanLowerOffsets(ref.buffer)) {
         return ref;
     }
-    id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)ref.buffer;
     const u64 index = ref.offset / WindowStep;
     const u64 start = index * WindowStep;
+    id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)ref.buffer;
+    // Per draw: the windows of this thread's last lookups, without the lock. Keyed by the buffer's
+    // GPU address too, so a new buffer at a freed one's address never finds the old window.
+    struct Last {
+        void* buffer;
+        u64 gpu_address;
+        u64 index;
+        void* window;
+    };
+    thread_local Last last[4]{};
+    thread_local u32 next = 0;
+    const u64 gpu_address = buffer.gpuAddress;
+    for (const Last& l : last) {
+        if (l.buffer == ref.buffer && l.gpu_address == gpu_address && l.index == index && l.window) {
+            return {l.window, ref.offset - start};
+        }
+    }
     static std::mutex mutex;
     std::scoped_lock lock{mutex};
     NSMutableDictionary* windows = objc_getAssociatedObject(buffer, &windows_key);
@@ -123,6 +139,7 @@ BufferRef LowOffset(BufferRef ref) {
                         buffer.label.UTF8String ?: "a buffer");
         }
     }
+    last[next++ % 4] = {ref.buffer, gpu_address, index, (__bridge void*)window};
     return {(__bridge void*)window, ref.offset - start};
 }
 

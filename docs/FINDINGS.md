@@ -1624,3 +1624,9 @@ differences equal off-vs-off (swaying flowers, fog); overall brightness overlaps
 **The user's play session, 0.5.3 → 0.5.4 (invariant default + compression + windows)**, Hemwick,
 full screen 4K native, Metal HUD: 51.3 FPS / GPU 20.1 ms → 70.1 / 14.9; another view 80.7 / 12.6
 → 109.1 / 9.3.
+
+**Window lookup cost.** With the window lock and dictionary lookup on every draw at 3.5 GiB and
+above, the city (1080p, uncapped, window visible) fell from ~137 to 97–108 FPS over a minute as
+streaming moved meshes there. With a per-thread cache of the last windows (no lock on a hit) it
+held 125–148 (compression on) and 112–119 (off). Earlier runs read exactly 120 because the
+harness window was in the background (macOS limits it); uncapped comparisons need it visible.
