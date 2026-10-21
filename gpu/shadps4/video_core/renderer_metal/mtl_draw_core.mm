@@ -526,7 +526,7 @@ void Runs::Flush(Encoder& e) {
         e.SetBuffer(Stage::Vertex, kTessInputBuffer, d.patch.control);
         e.SetBuffer(Stage::Vertex, kTessPatchBuffer, d.patch.patch);
         e.SetBuffer(Stage::Vertex, kTessFactorBuffer, d.patch.factors);
-        e.DrawPatches(d.patch.output_control_points, 0, d.patch.patches, {}, 1, 0);
+        e.DrawPatches(d.patch.output_control_points, 0, d.patch.patches, {}, 1, d.patch.instance);
     }
     ASSERT_MSG(num_pending == 0, "draws queued while a run was drawn");
     e.ReleaseOrderCommand();
