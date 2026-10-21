@@ -154,6 +154,19 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   0.5.2-5-g…. Release apps replace themselves in place; checkout apps only notify.
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 
+## State as of 2026-10-21 (after 0.5.3, local master, not pushed)
+
+- **0.5.4 candidates on master:** invariant positions by default (`BB_SPIRV_PRECISE=vertex`
+  restores 0.5.3; +15% GPU-bound at 1440p; an old shader cache migrates once), three drawables
+  in full screen (#25), archive writes spaced to 20x their duration. PR #20's remaining commits
+  (mouse look, Cmd+W) tested on branch `test-pr20-rest` with a link fix for the unit tests.
+- **Diagnostics:** `BB_SAMPLE_MS=1` (main-thread sampler for long frames, `BB_SAMPLE_DUMP`),
+  `BB_ENCODER_STATS=1` (Metal encoders per frame by kind and why the previous one ended),
+  `BB_PASS_STATS=1`, `BB_FRAME_STATS=1` spike lines (game/flip/present breakdown).
+- Traversal hitches on an M4 Max are GPU headroom (frames-ahead waits), not compiles or the
+  archive; the city's tessellated draws split 67 render passes a frame (FINDINGS 2026-10-21,
+  MACOS_BACKLOG Performance: tessellation kernels out of the pass).
+
 ## Next steps (in order)
 
 1. **Native arm64 GPU process** (docs/DESIGN_NATIVE_GPU_PROCESS.md): M0 spike passed (1.75× on
@@ -177,6 +190,12 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 4. Launcher / `.app` bundle.
 
 ## Gotchas learned
+
+- **Never send signals to guest threads** (sampling, stack dumps): SIGPROF every 1 ms on the
+  main thread made texture streaming fail within minutes. Suspend the thread and read its state
+  instead (`src/runtime_sampler.c`).
+- The test harness cannot enter full screen while nobody is at the Mac (no Space transition);
+  full-screen checks need the user present.
 
 - **Never attach lldb/debugserver to a Rosetta (x86-64) process and kill it**: on 2026-10-12 it
   wedged Rosetta (every new x86 process hung in state U until it recovered hours later).

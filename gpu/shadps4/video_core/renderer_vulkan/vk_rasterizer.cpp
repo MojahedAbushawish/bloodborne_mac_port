@@ -318,7 +318,19 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
     // bbport: the G-buffer pass (5+ color targets) holds the scene depth, and its constants the
     // main camera (shadow passes bind the same layout with the light's camera).
-    gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    const bool scene_gbuffer = std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    if (scene_gbuffer && !upscaler->Enabled() && BbSettings::Get().ultrawide_width) {
+        const auto& size = texture_cache.GetImage(db_desc.first).info.size;
+        auto& settings = BbSettings::Get();
+        if (settings.active_render_width != int(size.width) ||
+            settings.active_render_height != int(size.height)) {
+            settings.active_render_width = size.width;
+            settings.active_render_height = size.height;
+            std::printf("Native ultrawide: observed scene depth %ux%u (no host scaling)\n",
+                        size.width, size.height);
+        }
+    }
+    gbuffer_draw = camera_motion->Enabled() && scene_gbuffer;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
     }
@@ -1579,6 +1591,10 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
             image_id = depth_image_id;
             image = &texture_cache.GetImage(image_id);
         }
+        // bbport: a lazy usage upgrade (Runtime::UpgradeUsage) runs on the GPU thread.
+        if (image->NeededUsage(entry.desc.view_info) != 0) {
+            return false;
+        }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) ||
             (upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
@@ -1926,7 +1942,7 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
     // Bind index buffer.
     const u32 index_buffer_size = regs.num_indices * index_size;
     const auto [buffer, offset] =
-        buffer_cache.ObtainBuffer(index_address, index_buffer_size, false);
+        buffer_cache.ObtainIndexBuffer(index_address, index_buffer_size);
     NoteRead(buffer, offset, index_buffer_size);
     if (FrameCapture::Tracing()) {
         FrameCapture::Trace(fmt::format("I {:#x} {}", index_address, index_buffer_size));
@@ -2482,6 +2498,21 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
+    }
+
+    // bbport: a lazy usage upgrade replaces the image's texture. Every binding of this stage gets
+    // its upgrade before any binding takes a texture: a dispatch that writes one mip and reads
+    // another in a second pixel format must not write the replaced texture.
+    if (!on_helper) {
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (!image_id) {
+                continue;
+            }
+            auto& image = texture_cache.GetImage(image_id);
+            if (const u32 needed = image.NeededUsage(desc_ptr->view_info)) {
+                runtime.UpgradeUsage(&image, needed);
+            }
+        }
     }
 
     // Second pass to re-bind images that were updated after binding
@@ -3702,6 +3733,7 @@ void Rasterizer::NoteFrameStart() {
         profiler->BeginFrame();
     }
     const u64 frame = BbStats::gpu_frames.fetch_add(1, std::memory_order_relaxed) + 1;
+    Metal::EncoderStatsFrame(); // BB_ENCODER_STATS
     // BB_BUFFER_STATS=1: how many earlier frames the GPU has not finished when the GPU thread
     // starts a frame — the lag that decides whether guest memory can be read in place.
     static const bool stats = [] {

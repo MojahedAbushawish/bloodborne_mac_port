@@ -178,7 +178,7 @@ if (APPLE)
         runtime_memory_set_gpu_hooks runtime_memory_write_backing
         runtime_process_time_counter runtime_process_time_us runtime_restart
         runtime_thread_attach_host runtime_thread_clear_blocked runtime_thread_cpu_ns
-        runtime_thread_set_blocked runtime_tsc_frequency)
+        runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip)
     foreach(symbol IN LISTS BB_HOST_RUNTIME_SYMBOLS)
         target_link_options(bbgpu PRIVATE -Wl,-U,_${symbol})
     endforeach()
@@ -393,3 +393,12 @@ add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_sup
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
+
+# Opt-in synthetic regression: no game files or runtime diagnostics required.
+add_executable(index-offset-test EXCLUDE_FROM_ALL
+    ../tests/test_index_offset.cpp ../tests/test_index_triangle.mm)
+set_source_files_properties(../tests/test_index_triangle.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_include_directories(index-offset-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_options(index-offset-test PRIVATE -UNDEBUG)
+target_link_libraries(index-offset-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+target_link_options(index-offset-test PRIVATE -Wl,-export_dynamic)

@@ -55,6 +55,26 @@ do {
     check(PixelSize(2560, 1440).iniValue == "2560x1440" && PixelSize(2560, 1440).description == "2560 × 1440", "format")
 }
 
+// Native wide patch: display size is independent of the neutral renderer size.
+do {
+    var settings = GameSettings()
+    settings.output = PixelSize(2560, 1440)
+    settings.ultrawide = true
+    settings.wideOutput = PixelSize(3840, 1080)
+    settings.upscaler = .metalfx
+    settings.preset = 3
+    settings.liveResolution = .on
+    var ini = IniFile()
+    settings.apply(to: &ini)
+    check(ini["output_res"] == "1920x1080" && ini["ultrawide_res"] == "3840x1080", "wide patch and neutral renderer")
+    check(ini["upscaler"] == "off" && ini["preset"] == "0" && ini["live_resolution"] == "0", "native wide avoids duplicate host scaling")
+    var loaded = GameSettings(ini: ini)
+    check(loaded.ultrawide && loaded.renderSize == PixelSize(3840, 1080), "wide selection survives restart")
+    loaded.ultrawide = false
+    loaded.apply(to: &ini)
+    check(ini["ultrawide_res"] == nil && ini["output_res"] == "2560x1440", "disable removes patch and restores standard output")
+}
+
 // GameSettings: defaults, reading, values the launcher does not offer, writing back.
 do {
     let defaults = GameSettings(ini: IniFile())
@@ -65,6 +85,7 @@ do {
     check(!defaults.objectMotion && defaults.liveResolution == .off && defaults.effects["debug_camera"] == false && defaults.effects["debug_menu"] == false, "default advanced, debug")
     check(defaults.effects["effect_dof"] == true && defaults.effects["effect_ssr"] == false && defaults.effects["skip_intro"] == false, "default effects")
     check(defaults.sharpen && defaults.sharpness == 0.3 && !defaults.showFPS && !defaults.metalHUD && defaults.shaderCompile == .balanced, "default extras")
+    check(defaults.textureCompression && !GameSettings(ini: IniFile(text: "texture_compression=0\n")).textureCompression, "texture compression: default on, read")
 
     let read = GameSettings(ini: IniFile(text: "upscaler=metalfx\npreset=2\noutput_res=2560x1440\nfps_cap=40\nfullscreen=1\neffect_dof=0\nshow_fps=1\nmetal_hud=1\nrenderer=metal\nshader_compile=skip\nsharpness=0.75\n"))
     check(read.upscaler == .metalfx && read.preset == 2 && read.output == PixelSize(2560, 1440), "read display")
@@ -99,6 +120,7 @@ do {
     check(file["model_lod"] == "2" && file["live_resolution"] == "auto" && file["debug_menu"] == "1" && file["jitter"] == "0", "apply advanced keys")
     check(file["reactive_scale"] == "1.00" && file["reactive_threshold"] == "0.20" && file["reactive_max"] == "0.90" && file["object_motion"] == "0", "apply reactive keys")
     check(file["metal_hud"] == "1", "apply writes the Metal HUD key")
+    check(file["texture_compression"] == "1", "apply writes the texture compression key")
     check(file.text.hasPrefix("# header\n"), "header kept")
     // Review focus 3: reloading after the game's menu changed the file picks up its values.
     file["preset"] = "3"
@@ -212,8 +234,8 @@ do {
     check(c.environment["PATH"]?.hasPrefix("/opt/homebrew/bin:") == true, "checkout: Homebrew tools for the rebuild")
     let cd = checkout!.launchPlan(gameDir: game, saveDir: nil, dataDir: defaultData, env: env.merging(["BB_DATA_DIR": "/z"]) { $1 })
     check(cd.environment["BB_DATA_DIR"] == "/z" && cd.environment["BB_SAVE_DIR"] == nil, "explicit data folder passes; stale save folder removed")
-    check(packaged!.gameCheckCommand == [contents.appendingPathComponent("Resources/python/bin/python3").path, port.appendingPathComponent("scripts/game_check.py").path], "packaged game check")
-    check(checkout!.gameCheckCommand == ["/usr/bin/env", "python3", repo.appendingPathComponent("scripts/game_check.py").path], "checkout game check")
+    check(packaged!.gameCheckCommand == [contents.appendingPathComponent("Resources/python/bin/python3").path, "-B", port.appendingPathComponent("scripts/game_check.py").path], "packaged game check")
+    check(checkout!.gameCheckCommand == ["/usr/bin/env", "python3", "-B", repo.appendingPathComponent("scripts/game_check.py").path], "checkout game check")
     try? fm.createDirectory(at: root.appendingPathComponent("CUSA03173"), withIntermediateDirectories: true)
     try? Data().write(to: root.appendingPathComponent("CUSA03173/eboot.bin"))
     check(checkout!.defaultGameDir()?.path == root.appendingPathComponent("CUSA03173").path, "checkout default: ../CUSA03173")
@@ -336,6 +358,17 @@ do {
     config.apply(to: &conf)
     check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
     check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
+}
+
+// High-resolution ultrawide selection on memory-constrained Macs.
+do {
+    let gib: UInt64 = 1024 * 1024 * 1024
+    for size in [PixelSize(3440, 1440), PixelSize(5120, 1440)] {
+        check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 16 * gib) != nil, "16 GB wide memory warning")
+        check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 24 * gib) == nil, "24 GB boundary")
+        check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 64 * gib) == nil, "64 GB wide selection")
+    }
+    check(Resolution.ultrawideMemoryWarning(PixelSize(3840, 1080), memoryBytes: 16 * gib) == nil, "1080p wide selection")
 }
 
 if failures > 0 {

@@ -1406,12 +1406,78 @@ GPU-process CPU from `top`:
   swings between sessions, so only alternating runs compare.
 - Taken onto master (authorship kept) for 0.5.3.
 
+## Lossless texture compression and frame pacing on an M3 Pro (2026-10-20)
+
+**Compression.** Metal compresses private textures losslessly only when they are created without
+`MTLTextureUsageShaderWrite` and `MTLTextureUsagePixelFormatView`. Every non-BC image had both, so
+nothing was compressed. On the M3 Pro (150 GB/s, a third of the M4 Max) that is the largest
+cost of the frame.
+- **The bound:** creating textures without the two usages gave +22% at the clinic, but the scene
+  turned red: some images are written by compute or read in another pixel format.
+- **Lazy usages:** images get both usages, once, when a binding needs one (storage, another pixel
+  format, a stencil view). The texture is re-created and its contents copied.
+
+Which views need PixelFormatView (Metal API validation, 64×64 test textures):
+
+| View | Needs PixelFormatView? |
+|---|---|
+| sRGB ↔ linear, swizzles, level and layer ranges | no |
+| reinterpreting formats (RGBA8 → R32Uint), RGBA ↔ BGRA, stencil views of depth | yes |
+
+M3 Pro 18 GB, macOS 15.7, `m3pro-fixes-v1` (0.5.1 + PR #20) against the same plus this change,
+alternating, warm caches, 60 s each:
+
+| Scene | Before | After | GPU ms/frame | CPU ms/frame | CPU % (uncapped) |
+|---|---|---|---|---|---|
+| Iosefka's Clinic lamp, 1080p (2 runs) | 37.6 | **44.3 (+17.8%)** | 26.5 → 22.4 | 82.2 → 77.4 | 309 → 343 |
+| Hunter's Dream, 1080p uncapped (2) | 49.7 | **62.2 (+25.2%)** | 20.0 → 15.9 | 57.5 → 53.8 | 286 → 335 |
+| Hunter's Dream, 1440p live (2) | 28.5 | **40.2 (+41%)** | 35.0 → 24.8 | 68.3 → 56.5 | 195 → 227 |
+
+CPU % rises only because more frames are drawn per second; CPU time per frame falls.
+
+Images are within run-to-run differences:
+
+| Scene | After vs before | Two unchanged runs |
+|---|---|---|
+| Clinic | 1.3–1.4 | 1.1 |
+| Hunter's Dream 1080p | 6.9–7.7 | 5.7 |
+| Hunter's Dream 1440p | 6.3–6.5 | 5.4 |
+
+Most upgrades happen at load. In play, area loads add a few dozen, which the frame stats report as
+`Texture usage upgrades: N (M MB copied)`. Metal API validation (`MTL_DEBUG_LAYER=1`) passes at the
+clinic and at 1440p.
+
+Two bugs were found before the PR:
+- **Wrong colours on streamed textures.** The game writes RGBA8 uint by compute and samples it as
+  unorm/sRGB. When a dispatch bound the image for writing and a later binding of the same dispatch
+  upgraded it, that dispatch wrote the replaced texture, leaving garbage mips (purple or noisy
+  enemies). Now every binding of a stage is upgraded before any binding takes a texture, and an
+  upgrade gives both usages.
+- **A stencil view without PixelFormatView.** The 1440p depth resample created one, caught by
+  validation. Its source and proxy are now upgraded first.
+
+**Frame pacing.** On the ProMotion panel a steady 60 FPS cap showed frames for 12.5 / 20.8 ms
+alternately, although they were delivered every 16.7 ms, even with the GPU idle (title screen).
+Per-frame display times came from `presentedHandler`.
+`presentDrawable:afterMinimumDuration:` (97% of the cap's period) evens it out:
+
+| Hunter's Dream 1080p, 60 cap | Off | On |
+|---|---|---|
+| Consecutive frames shown for different times | 97% | 4% |
+| Frames shown 16.7 ms | ~40% | 98% |
+| Late frames/min | 84 | 30 |
+| Game flip → on screen (median) | 39.7 ms | **63.4 ms** |
+
+It costs about a frame of input latency, so it is a menu toggle (`frame_pacing`), off by default.
+
 ## Full screen in the background harness (2026-10-20)
 
 Full screen (`fullscreen=1`, MetalFX 1440p, 60 cap, app not focused): 59.5-59.8 FPS with 30-40
 game-side spikes per run and worst frames of 25 ms (three 120 Hz refreshes), on master and on
 the cleanup branch alike; windowed the same runs have 0 spikes. The user plays full screen and
 reports smooth play, so this is likely the unfocused harness. Not chased.
+**Wrong (2026-10-21):** it was the two drawables, not the harness (#25; three drawables: 0-2
+spikes; see below).
 
 ## 0.5.3 cleanup: no MoltenVK or Vulkan loader in the app (2026-10-19)
 
@@ -1438,3 +1504,152 @@ VMA, Zydis, xbyak, FSR 4's tools and the `renderer` setting left the build and t
 - `build_macos.sh --test`: the same PASS lines as before minus the two MoltenVK interop runs
   (221 vs 223), the same error lines. A build against a copy of `deps/` without the loader,
   MoltenVK, VMA, Zydis and xbyak (symlink overlay) succeeds.
+
+
+2026-10-20 — launcher validation fixes (split from PR #26): the duplicate-launch
+guard now recognizes bbgpu-host-macos27 as well as bbgpu-host/bb-probe. Game-folder
+validation passes Python -B in both checkout and packaged layouts; importing prepare.py
+must not create __pycache__ inside the signed app. The combined build passed strict
+signature verification after launcher folder validation. Launcher model tests cover both
+checker commands. No renderer defaults, lifecycle or resolution changes in this split.
+
+
+## Invariant positions, full-screen drawables, ultrawide, and where traversal hitches come from (2026-10-21)
+
+M4 Max, master after 0.5.3, windowed unless noted, warm caches, test data folder.
+
+**Invariant positions (PR #20's `BB_SPIRV_PRECISE=invariant`, now the default).** Uncapped
+(`BB_PRESENT_MODE=Immediate`), alternating runs, the invariant variant with its own GPU cache
+folder (the mode is part of the shader cache version):
+
+| | master (vertex NoContraction) | invariant |
+|---|---|---|
+| Hunter's Dream 1440p native, stand (3 runs) | 85.6 / 85.7 / 85.9 | 98.8 / 99.1 / 98.7 (+15%) |
+| turn | 85.3 / 85.2 / 85.4 | 96.1 / 96.0 / 96.3 (+13%) |
+| City 1080p (not GPU-bound) | ~119.8 | ~119.9 |
+
+- The same frames match in screenshots in both scenes (mean pixel difference ~4-5 of 255,
+  foliage and fog): no z-fighting or holes, unlike NoContraction's removal on MoltenVK
+  (2026-10-13). City: 13-20 late game frames per run against 6-12 (watch).
+- A shader meta version mismatch used to leave every old entry in the store for good (never
+  preloadable, "could not be preloaded" each session). It now counts as an older cache format:
+  the first session clears the store once and rebuilds it during play (test data: 460 old
+  entries cleared, 0 late frames in that run at the 60 cap; next start 214 of 215 preloaded).
+  The MSL check excludes older formats from its 90% rule (268 of 268 invariant pipelines built
+  from the variant's cache).
+
+**Full screen: three drawables.** 60 cap, city, `BB_SWAPCHAIN_IMAGES` 2 vs 3, two runs each:
+late frames standing 15 / 10 vs 1 / 0, turning 11 / 18 vs 2 / 0, worst frame turning 24.9 vs
+16.7 ms. A MacBook Air M5 dropped to 30-40 FPS full screen with two (#25). The presenter now
+keeps three while the window is full screen and two in a window. The overnight harness could
+not enter full screen with nobody at the Mac (no Space transition, `Window:` size unchanged,
+also as a foreground app), so the switch itself still needs one look: `Presenter: 3 drawables
+(full screen)` in the log.
+
+**Ultrawide (#30).** 3840x1080, city: 60.0 FPS, pacing stddev 0.01 ms, scene depth observed
+at 3840x1080, game arena 5.0 of 7.0 GiB, correct geometry and HUD. 5120x1440, Dream: correct,
+55-57 FPS, GPU process 10-11 GB (the warning below 24 GB is justified).
+
+**Traversal hitches.** Two 10-minute Hemwick walks (1440p MetalFX Balanced, 60 cap,
+`BB_SPIKE_MS=20`), cold then warm pipeline cache: 42 spikes each, 15 archive writes in the cold
+one and none in the warm one, so archive writes are not the cause here. Most spikes are the
+first minute (title and loading at 30 FPS). In gameplay, 2-3 per minute, and nearly all are
+"game late, flip on time": the game's frame took 21-27 ms while flips stayed at 16.7 ms
+because frames were queued, so nothing visible. Visible ones (a late flip or present): 1-2 per
+10 minutes. In the late game frames the main thread used ~6 ms of CPU; the game waited on
+"frames ahead" (the GPU finishing the previous frame, 7.9 ms in an example) with 1.3x the
+usual draws (1532 vs ~1215), 50-130 write faults (2-6 ms) against ~31 a frame. So the
+headroom that hides them is GPU time: a slower GPU turns these into visible hitches, and GPU
+time per frame is the lever for smoothness on base and 16 GB Macs.
+- `BB_SAMPLE_MS` (main-thread sampler): the few long main-thread frames (14 over 20 ms in 10
+  minutes) spread thinly over many guest addresses, no hotspot; our runtime ~3% (read, waits).
+- The first sampler sent SIGPROF to the main thread every 1 ms: the game's texture streaming
+  failed every time within minutes (`[Dantelion2 Panic] CSGXTextureCreateFragment.cpp(137)`,
+  then the game's deliberate null write). It now suspends the thread and reads its state
+  instead (no failures). Signals into guest threads are not harmless: the watchdog's SIGUSR2
+  dump is the same kind of interruption (CLAUDE.md: it derails a worker).
+
+**Encoders and render-pass splits.** `BB_ENCODER_STATS=1`, city at 1440p MetalFX, per frame:
+~372 Metal encoders: 95 render passes started at pass boundaries, 23 after EndEncoding, **67
+render passes split "after compute"**, 67 compute encoders opened inside a pass, ~24 compute and
+~24 blit after ordering waits, ~32 blits after compute. All 67 in-pass computes come from
+`Runs::DrawTessellated` (the vertex and control stages as compute kernels): tessellated draws
+sit between ordinary draws, so each run ends the pass, runs its kernels and reopens the pass
+with Load (a store and reload of the attachments on Apple's GPU). Upper bound, tessellated draws
+skipped entirely (scratch switch, not kept), uncapped: GPU busy 6.60 / 7.49 -> 5.66 / 5.55
+ms/frame, encoders 237 / 228 -> 155 / 154. Tessellation (kernels, patch draws and splits) is
+15-25% of the city's GPU frame; hoisting the kernels out of the pass saves part of it
+(MACOS_BACKLOG, Performance).
+
+**First session after updating** (a copy of a 0.5.3-era store, 649 pipelines, then a 10-minute
+Hemwick walk): the store cleared once ("649 pipelines of an older cache format"), 334 pipelines
+compiled during the walk, the archive wrote 9 times (writes now spaced to 20x their duration;
+the earlier cold walk wrote 15 times), 60 FPS mean, 14 game-side spikes in the minute entering
+the area and 5 visible ones (late flip or present) over the remaining 9 minutes. A one-time cost
+per player; the next start preloads.
+
+**Frames ahead near the GPU limit.** Dream at 3456x1944 native, 60 cap (GPU busy 15.2-15.5
+ms/frame), `BB_FRAMES_AHEAD` 1 (default) vs 2, two runs each: with 1, pacing stddev 0.01 ms and
+worst frame 16.7 ms standing and turning in every run; with 2, turning had worst frames of 31-33
+ms and stddev 1.1-1.5 ms. More frames ahead does not absorb heavy frames here, it bunches them;
+the default stays 1.
+
+## Metal's 32-bit index and indirect offsets; texture compression on an M4 Max (2026-10-21, evening)
+
+**Vanishing geometry (#36, #35, #18).** DiAvisoo found that indexed draws more than 4 GiB into the
+guest arena drew nothing on an M2 Max. Plain Metal probes (no port code) on the M4 Max:
+
+| Command, offset into a 8 GiB no-copy buffer | below 4 GiB | 4 GiB + x |
+|---|---|---|
+| `drawIndexedPrimitives` (`indexBufferOffset`), direct and indirect | correct | reads at x |
+| `drawPrimitives:indirectBuffer:` (`indirectBufferOffset`) | correct | reads at x |
+| vertex/fragment/compute `set*Buffer:offset:` read by the shader | correct | correct |
+| any of the above through a second no-copy buffer over the same pages, low offset | correct | correct |
+
+(A first probe wrongly blamed shader buffer bindings: its "drawn" check was always true and the
+failure was the indirect arguments.) Fix: `Metal::LowOffset` (`mtl_buffer.mm`) draws indexed,
+indirect and patch draws and indirect dispatches from 3.5 GiB on through a window, a second
+`MTLBuffer` over the arena's pages, 1 GiB long every 512 MiB. Metal counts a window's whole length
+in `currentAllocatedSize` (the Metal HUD's "Metal" figure) without any memory: a 4 GiB window
+added 4 GiB there with the footprint unchanged (0.50 → 0.50 GiB), and the first version (4 GiB
+windows from 2 GiB on) showed ~4.2 GB more in the HUD in play with App memory equal. Normal play
+reached the 2–4 GiB range in every test run; beyond 4 GiB needs streaming through areas.
+
+**Texture compression (#33) on the M4 Max**, compression off (`BB_LAZY_TEXTURE_USAGE=0`) vs on,
+alternating, uncapped (presenter limit 120): Hunter's Dream 1440p native 101.7 / 102.0 / 102.1 →
+119.6 / 119.8 / 119.8 (at the limit); Central Yharnam 1080p 120 both. Screenshots: off-vs-on
+differences equal off-vs-off (swaying flowers, fog); overall brightness overlaps across runs.
+`MTL_DEBUG_LAYER=1` play runs clean in both scenes. 3–9 upgrades per run, at load, 14–35 MB.
+
+**The user's play session, 0.5.3 → 0.5.4 (invariant default + compression + windows)**, Hemwick,
+full screen 4K native, Metal HUD: 51.3 FPS / GPU 20.1 ms → 70.1 / 14.9; another view 80.7 / 12.6
+→ 109.1 / 9.3.
+
+**Window lookup cost.** With the window lock and dictionary lookup on every draw at 3.5 GiB and
+above, the city (1080p, uncapped, window visible) fell from ~137 to 97–108 FPS over a minute as
+streaming moved meshes there. With a per-thread cache of the last windows (no lock on a hit) it
+held 125–148 (compression on) and 112–119 (off). Earlier runs read exactly 120 because the
+harness window was in the background (macOS limits it); uncapped comparisons need it visible.
+
+2026-10-20 — native ultrawide (split from PR #26): keep Kyo's complete scene/camera/UI
+patch, including the dependent MOV/NOP writes and fallback globals. Removing only part
+of that sequence caused a squeezed scene, stretched/black menus and a 640x360 scene.
+The full sequence fixes those dimensions; bypass live resizing/upscaling for this path.
+Keep the first retail graphics heap. Above 1920x1080 pixel count, grow only the second
+texture pool to 1536 MiB with 6144 MiB DMEM (7 GiB GPU arena): retail capacity reproduced
+an error-9 combat texture allocation failure. Do not import the oversized community heaps.
+
+The launcher warns for 3440x1440/5120x1440 below 24 GB physical memory. Invalid
+ultrawide_res values now stop with one actionable line rather than a Python traceback.
+Patch tests cover all five scene/camera/UI presets and heap bounds; CLI, launcher and
+shell tests cover invalid input, memory-warning boundaries and disable/restart behavior.
+The combined M2 Max 64 GB playtest rendered travel, combat and menus correctly, but also
+used PR #20's invariant shaders and precise readbacks. Those experiments and performance
+claims are not changes to the defaults in this PR. See METAL_ULTRAWIDE_TEST.md; independent
+3840x1080/5120x1440 visual validation on the maintainer's machine remains requested.
+
+Split validation: both architecture builds, launcher/model tests, 16 patch/ultrawide tests,
+shell restart tests, settings-preservation and native scene-target roundtrips pass. The
+broader build_macos.sh --test run stops at the unchanged mtl-encoder-test timestamp check
+"the render encoder's fragment end is sampled, after the blit" on this M2; the Metal
+encoder sources and that test are identical to master. No full-suite pass is claimed.

@@ -55,8 +55,21 @@ struct LauncherView: View {
         HStack(alignment: .top, spacing: 0) {
             Form {
                 Section("Display") {
-                    Picker("Output resolution", selection: $model.settings.output) {
-                        ForEach(model.outputChoices, id: \.self) { Text($0.description).tag($0) }
+                    Toggle("Ultrawide", isOn: $model.settings.ultrawide)
+                    if model.settings.ultrawide {
+                        Picker("Resolution", selection: $model.settings.wideOutput) {
+                            ForEach(Resolution.ultrawideOutputs, id: \.self) { Text(Resolution.wideLabel($0)).tag($0) }
+                        }
+                        if let warning = Resolution.ultrawideMemoryWarning(model.settings.wideOutput,
+                            memoryBytes: ProcessInfo.processInfo.physicalMemory) {
+                            Text(warning).font(.caption).foregroundStyle(.orange)
+                        }
+                        Text("Native resolution. Uses your existing game UI; no UI files are installed.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Picker("Output resolution", selection: $model.settings.output) {
+                            ForEach(model.outputChoices, id: \.self) { Text($0.description).tag($0) }
+                        }
                     }
                     Picker("Window", selection: $model.settings.fullscreen) {
                         Text("Windowed").tag(false)
@@ -73,14 +86,19 @@ struct LauncherView: View {
                     }
                 }
                 Section("Upscaler") {
+                    if model.settings.ultrawide {
+                        Text("Ultrawide runs at the selected native resolution, with upscaling off.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Upscaler", selection: $model.settings.upscaler) {
                         ForEach(model.upscalerChoices) { Text($0.label).tag($0) }
                     }
+                    .disabled(model.settings.ultrawide)
                     Picker("Quality", selection: $model.settings.preset) {
                         ForEach(Resolution.presetNames.indices, id: \.self) { Text(Resolution.presetNames[$0]).tag($0) }
                     }
-                    .disabled(!model.settings.upscaler.usesPreset)
-                    LabeledContent("Renders", value: "\(model.settings.renderSize) → \(model.settings.output)")
+                    .disabled(model.settings.ultrawide || !model.settings.upscaler.usesPreset)
+                    LabeledContent("Renders", value: "\(model.settings.renderSize) → \(model.settings.displayOutput)")
                     if model.settings.upscaler != .off {
                         Toggle("Sharpening", isOn: $model.settings.sharpen)
                         if model.settings.sharpen {
@@ -136,6 +154,11 @@ struct LauncherView: View {
                         ForEach(ShaderCompile.allCases) { Text($0.label).tag($0) }
                     }
                     Text("Shaders the game hasn't used on this Mac before compile in the background. Shaders seen before load at start either way.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Performance") {
+                    Toggle("Texture compression", isOn: $model.settings.textureCompression)
+                    Text("Lets the GPU compress the game's textures and render targets without any loss of quality. They take less memory bandwidth, which is the main limit on base and Pro chips: up to 40% more FPS there, less on Max and Ultra chips. Turn it off if you see wrong colours or broken textures. Applies at the next start.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Startup and debugging") {

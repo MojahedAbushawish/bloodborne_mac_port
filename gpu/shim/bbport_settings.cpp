@@ -25,6 +25,7 @@ bool OwnedKey(const std::string& key) {
     static constexpr const char* owned[] = {
         "upscaler", "preset", "sharpen", "sharpness", "jitter", "reactive", "object_motion",
         "reactive_scale", "reactive_threshold", "reactive_max", "debug_view", "show_fps",
+        "frame_pacing",
         "model_lod", "output_res",
         "live_resolution", "shader_compile", "renderer"};
     for (const char* k : owned) {
@@ -75,6 +76,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "frame_pacing") {
+        v.frame_pacing = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
     } else if (key == "live_resolution") {
@@ -103,6 +106,13 @@ void Set(Values& v, const std::string& key, const std::string& value) {
 Values& Get() {
     static Values values;
     return values;
+}
+
+std::array<int, 2> OutputSize() {
+    const auto& v = Get();
+    if (v.ultrawide_width) return {v.ultrawide_width, v.ultrawide_height};
+    const int index = FixedRenderSession() ? v.startup_output_res : v.output_res.load();
+    return {OutputWidths[index], OutputHeights[index]};
 }
 
 void Load() {
@@ -141,6 +151,25 @@ void Load() {
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
             Set(v, key, value);
+        }
+    }
+    // Native wide patches own scene/UI dimensions. Disable generic host resizing.
+    // Match the launcher's validated presets; observe actual scene size at the G-buffer.
+    v.ultrawide_width = v.ultrawide_height = 0;
+    if (const char* wide = std::getenv("BB_ULTRAWIDE_RES"); wide && wide[0]) {
+        constexpr std::array<int, 2> sizes[] = {
+            {2560, 720}, {3840, 1080}, {5120, 1440}, {2560, 1080}, {3440, 1440}};
+        for (const auto& size : sizes) {
+            if (wide == std::to_string(size[0]) + "x" + std::to_string(size[1])) {
+                v.ultrawide_width = size[0];
+                v.ultrawide_height = size[1];
+                v.output_res = OutputDefault;
+                v.live_resolution = 0;
+                v.active_render_width = v.active_render_height = 0;
+                v.upscaler = UpscalerOff;
+                v.preset = NativeAA;
+                break;
+            }
         }
     }
     // The choice as asked for; ConfigureUpscalerSupport resolves what runs before the renderer
@@ -256,12 +285,12 @@ void Save() {
                  "# bbport settings (in-game menu: " BBPORT_MENU_KEYS " / L3+R3)\n"
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
-                 "debug_view=%d\nshow_fps=%d\n",
+                 "debug_view=%d\nshow_fps=%d\nframe_pacing=%d\n",
                  UpscalerName(saved_upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
-                 v.debug_view.load(), int(v.show_fps.load()));
+                 v.debug_view.load(), int(v.show_fps.load()), int(v.frame_pacing.load()));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));

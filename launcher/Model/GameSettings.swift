@@ -95,6 +95,9 @@ struct GameSettings: Equatable {
     static let newFileHeader = "# bbport settings (in-game menu: Cmd+, / L3+R3)\n"
 
     var output = Resolution.defaultOutput
+    var ultrawide = false
+    var wideOutput = PixelSize(3840, 1080)
+    var displayOutput: PixelSize { ultrawide ? wideOutput : output }
     var upscaler = Upscaler.off
     var preset = 0
     var sharpen = true
@@ -114,6 +117,9 @@ struct GameSettings: Equatable {
     var reactiveMax = 0.9
     var objectMotion = false
     var liveResolution = LiveResolution.off
+    /// bbport.ini texture_compression, read by run.sh at start (scripts/launch_settings.sh:
+    /// 0 = BB_LAZY_TEXTURE_USAGE=0).
+    var textureCompression = true
 
     init() {}
 
@@ -121,6 +127,11 @@ struct GameSettings: Equatable {
         // Booleans as the game reads them (atoi(value) != 0).
         func flag(_ key: String) -> Bool? { ini[key].map { (Int($0) ?? 0) != 0 } }
         if let v = ini["output_res"], let size = PixelSize(iniValue: v) { output = size }
+        if let v = ini["ultrawide_res"], let size = PixelSize(iniValue: v), Resolution.ultrawideOutputs.contains(size) {
+            ultrawide = true
+            wideOutput = size
+            if let original = ini["standard_output_res"].flatMap(PixelSize.init(iniValue:)) { output = original }
+        }
         if let v = ini["upscaler"], let u = Upscaler(rawValue: v) { upscaler = u }
         if let v = ini["preset"], let p = Int(v), Resolution.presetScales.indices.contains(p) { preset = p }
         if let v = flag("sharpen") { sharpen = v }
@@ -145,14 +156,17 @@ struct GameSettings: Equatable {
         if let v = number("reactive_max", 0...1) { reactiveMax = v }
         if let v = flag("object_motion") { objectMotion = v }
         if let v = ini["live_resolution"], let l = LiveResolution(rawValue: v) { liveResolution = l }
+        if let v = flag("texture_compression") { textureCompression = v }
     }
 
     /// Writes the launcher's settings into `ini`; every other line stays (a `renderer` key from
     /// 0.5.2 or earlier too: the game drops it the next time its menu saves).
     func apply(to ini: inout IniFile) {
-        ini["output_res"] = output.iniValue
-        ini["upscaler"] = upscaler.rawValue
-        ini["preset"] = String(preset)
+        ini["output_res"] = (ultrawide ? Resolution.defaultOutput : output).iniValue
+        ini["ultrawide_res"] = ultrawide ? wideOutput.iniValue : nil
+        ini["standard_output_res"] = output.iniValue
+        ini["upscaler"] = ultrawide ? "off" : upscaler.rawValue
+        ini["preset"] = ultrawide ? "0" : String(preset)
         ini["sharpen"] = sharpen ? "1" : "0"
         ini["sharpness"] = String(format: "%.2f", sharpness)
         ini["show_fps"] = showFPS ? "1" : "0"
@@ -170,11 +184,12 @@ struct GameSettings: Equatable {
         ini["reactive_threshold"] = String(format: "%.2f", reactiveThreshold)
         ini["reactive_max"] = String(format: "%.2f", reactiveMax)
         ini["object_motion"] = objectMotion ? "1" : "0"
-        ini["live_resolution"] = liveResolution.rawValue
+        ini["live_resolution"] = ultrawide ? "0" : liveResolution.rawValue
+        ini["texture_compression"] = textureCompression ? "1" : "0"
     }
 
     /// The scene size the game renders.
     var renderSize: PixelSize {
-        upscaler.usesPreset ? Resolution.renderSize(output: output, preset: preset) : output
+        ultrawide ? wideOutput : (upscaler.usesPreset ? Resolution.renderSize(output: output, preset: preset) : output)
     }
 }
