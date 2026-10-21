@@ -1630,3 +1630,26 @@ above, the city (1080p, uncapped, window visible) fell from ~137 to 97–108 FPS
 streaming moved meshes there. With a per-thread cache of the last windows (no lock on a hit) it
 held 125–148 (compression on) and 112–119 (off). Earlier runs read exactly 120 because the
 harness window was in the background (macOS limits it); uncapped comparisons need it visible.
+
+2026-10-20 — native ultrawide (split from PR #26): keep Kyo's complete scene/camera/UI
+patch, including the dependent MOV/NOP writes and fallback globals. Removing only part
+of that sequence caused a squeezed scene, stretched/black menus and a 640x360 scene.
+The full sequence fixes those dimensions; bypass live resizing/upscaling for this path.
+Keep the first retail graphics heap. Above 1920x1080 pixel count, grow only the second
+texture pool to 1536 MiB with 6144 MiB DMEM (7 GiB GPU arena): retail capacity reproduced
+an error-9 combat texture allocation failure. Do not import the oversized community heaps.
+
+The launcher warns for 3440x1440/5120x1440 below 24 GB physical memory. Invalid
+ultrawide_res values now stop with one actionable line rather than a Python traceback.
+Patch tests cover all five scene/camera/UI presets and heap bounds; CLI, launcher and
+shell tests cover invalid input, memory-warning boundaries and disable/restart behavior.
+The combined M2 Max 64 GB playtest rendered travel, combat and menus correctly, but also
+used PR #20's invariant shaders and precise readbacks. Those experiments and performance
+claims are not changes to the defaults in this PR. See METAL_ULTRAWIDE_TEST.md; independent
+3840x1080/5120x1440 visual validation on the maintainer's machine remains requested.
+
+Split validation: both architecture builds, launcher/model tests, 16 patch/ultrawide tests,
+shell restart tests, settings-preservation and native scene-target roundtrips pass. The
+broader build_macos.sh --test run stops at the unchanged mtl-encoder-test timestamp check
+"the render encoder's fragment end is sampled, after the blit" on this M2; the Metal
+encoder sources and that test are identical to master. No full-suite pass is claimed.
