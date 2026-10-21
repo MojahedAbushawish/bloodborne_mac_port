@@ -65,6 +65,10 @@ matter most on base and Pro chips. What changed:
   draws now go through a second Metal buffer over the same memory, at a low offset, with no copy.
 - **Smoother full screen** (#25): three frame buffers instead of two in full screen, where macOS
   shows the game's frames directly. Late frames per test run: 10–18 → 0–2.
+- **Native ultrawide** (from [@DiAvisoo](https://github.com/DiAvisoo), #30, building on Kyo's
+  resolution patches): 2560×1080 and 3440×1440 (21:9), 2560×720, 3840×1080 and 5120×1440 (32:9)
+  in the launcher, with the camera and HUD adjusted. 3840×1080 holds 60 FPS on an M4 Max; the
+  1440-tall modes need a lot of GPU memory, and the launcher warns on Macs with less than 24 GB.
 - **Optional frame pacing** (in-game menu: Display → Frame pacing): each frame stays on screen for
   one period of the FPS cap, for even motion on ProMotion displays, at the cost of about one
   frame of input latency. Off by default.
@@ -236,7 +240,7 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
-- Keyboard and mouse controls (mouse look, from #20); native ultrawide (#30).
+- Keyboard and mouse controls (mouse look, from #20).
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
