@@ -131,6 +131,11 @@ struct LauncherView: View {
                     Text("Shaders the game hasn't used on this Mac before compile in the background. Shaders seen before load at start either way.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Performance") {
+                    Toggle("Texture compression", isOn: $model.settings.textureCompression)
+                    Text("Lets the GPU compress the game's textures and render targets without any loss of quality. They take less memory bandwidth, which is the main limit on base and Pro chips: up to 40% more FPS there, less on Max and Ultra chips. Turn it off if you see wrong colours or broken textures. Applies at the next start.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Startup and debugging") {
                     ForEach(GameSettings.debugEffects) { effect in
                         Toggle(effect.label, isOn: effectBinding(effect.key))

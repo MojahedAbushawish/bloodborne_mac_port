@@ -114,6 +114,9 @@ struct GameSettings: Equatable {
     var reactiveMax = 0.9
     var objectMotion = false
     var liveResolution = LiveResolution.off
+    /// bbport.ini texture_compression, read by run.sh at start (scripts/launch_settings.sh:
+    /// 0 = BB_LAZY_TEXTURE_USAGE=0).
+    var textureCompression = true
 
     init() {}
 
@@ -145,6 +148,7 @@ struct GameSettings: Equatable {
         if let v = number("reactive_max", 0...1) { reactiveMax = v }
         if let v = flag("object_motion") { objectMotion = v }
         if let v = ini["live_resolution"], let l = LiveResolution(rawValue: v) { liveResolution = l }
+        if let v = flag("texture_compression") { textureCompression = v }
     }
 
     /// Writes the launcher's settings into `ini`; every other line stays (a `renderer` key from
@@ -171,6 +175,7 @@ struct GameSettings: Equatable {
         ini["reactive_max"] = String(format: "%.2f", reactiveMax)
         ini["object_motion"] = objectMotion ? "1" : "0"
         ini["live_resolution"] = liveResolution.rawValue
+        ini["texture_compression"] = textureCompression ? "1" : "0"
     }
 
     /// The scene size the game renders.
