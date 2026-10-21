@@ -1412,6 +1412,8 @@ Full screen (`fullscreen=1`, MetalFX 1440p, 60 cap, app not focused): 59.5-59.8 
 game-side spikes per run and worst frames of 25 ms (three 120 Hz refreshes), on master and on
 the cleanup branch alike; windowed the same runs have 0 spikes. The user plays full screen and
 reports smooth play, so this is likely the unfocused harness. Not chased.
+**Wrong (2026-10-21):** it was the two drawables, not the harness (#25; three drawables: 0-2
+spikes; see below).
 
 ## 0.5.3 cleanup: no MoltenVK or Vulkan loader in the app (2026-10-19)
 
@@ -1446,3 +1448,78 @@ validation passes Python -B in both checkout and packaged layouts; importing pre
 must not create __pycache__ inside the signed app. The combined build passed strict
 signature verification after launcher folder validation. Launcher model tests cover both
 checker commands. No renderer defaults, lifecycle or resolution changes in this split.
+
+
+## Invariant positions, full-screen drawables, ultrawide, and where traversal hitches come from (2026-10-21)
+
+M4 Max, master after 0.5.3, windowed unless noted, warm caches, test data folder.
+
+**Invariant positions (PR #20's `BB_SPIRV_PRECISE=invariant`, now the default).** Uncapped
+(`BB_PRESENT_MODE=Immediate`), alternating runs, the invariant variant with its own GPU cache
+folder (the mode is part of the shader cache version):
+
+| | master (vertex NoContraction) | invariant |
+|---|---|---|
+| Hunter's Dream 1440p native, stand (3 runs) | 85.6 / 85.7 / 85.9 | 98.8 / 99.1 / 98.7 (+15%) |
+| turn | 85.3 / 85.2 / 85.4 | 96.1 / 96.0 / 96.3 (+13%) |
+| City 1080p (not GPU-bound) | ~119.8 | ~119.9 |
+
+- The same frames match in screenshots in both scenes (mean pixel difference ~4-5 of 255,
+  foliage and fog): no z-fighting or holes, unlike NoContraction's removal on MoltenVK
+  (2026-10-13). City: 13-20 late game frames per run against 6-12 (watch).
+- A shader meta version mismatch used to leave every old entry in the store for good (never
+  preloadable, "could not be preloaded" each session). It now counts as an older cache format:
+  the first session clears the store once and rebuilds it during play (test data: 460 old
+  entries cleared, 0 late frames in that run at the 60 cap; next start 214 of 215 preloaded).
+  The MSL check excludes older formats from its 90% rule (268 of 268 invariant pipelines built
+  from the variant's cache).
+
+**Full screen: three drawables.** 60 cap, city, `BB_SWAPCHAIN_IMAGES` 2 vs 3, two runs each:
+late frames standing 15 / 10 vs 1 / 0, turning 11 / 18 vs 2 / 0, worst frame turning 24.9 vs
+16.7 ms. A MacBook Air M5 dropped to 30-40 FPS full screen with two (#25). The presenter now
+keeps three while the window is full screen and two in a window. The overnight harness could
+not enter full screen with nobody at the Mac (no Space transition, `Window:` size unchanged,
+also as a foreground app), so the switch itself still needs one look: `Presenter: 3 drawables
+(full screen)` in the log.
+
+**Ultrawide (#30).** 3840x1080, city: 60.0 FPS, pacing stddev 0.01 ms, scene depth observed
+at 3840x1080, game arena 5.0 of 7.0 GiB, correct geometry and HUD. 5120x1440, Dream: correct,
+55-57 FPS, GPU process 10-11 GB (the warning below 24 GB is justified).
+
+**Traversal hitches.** Two 10-minute Hemwick walks (1440p MetalFX Balanced, 60 cap,
+`BB_SPIKE_MS=20`), cold then warm pipeline cache: 42 spikes each, 15 archive writes in the cold
+one and none in the warm one, so archive writes are not the cause here. Most spikes are the
+first minute (title and loading at 30 FPS). In gameplay, 2-3 per minute, and nearly all are
+"game late, flip on time": the game's frame took 21-27 ms while flips stayed at 16.7 ms
+because frames were queued, so nothing visible. Visible ones (a late flip or present): 1-2 per
+10 minutes. In the late game frames the main thread used ~6 ms of CPU; the game waited on
+"frames ahead" (the GPU finishing the previous frame, 7.9 ms in an example) with 1.3x the
+usual draws (1532 vs ~1215), 50-130 write faults (2-6 ms) against ~31 a frame. So the
+headroom that hides them is GPU time: a slower GPU turns these into visible hitches, and GPU
+time per frame is the lever for smoothness on base and 16 GB Macs.
+- `BB_SAMPLE_MS` (main-thread sampler): the few long main-thread frames (14 over 20 ms in 10
+  minutes) spread thinly over many guest addresses, no hotspot; our runtime ~3% (read, waits).
+- The first sampler sent SIGPROF to the main thread every 1 ms: the game's texture streaming
+  failed every time within minutes (`[Dantelion2 Panic] CSGXTextureCreateFragment.cpp(137)`,
+  then the game's deliberate null write). It now suspends the thread and reads its state
+  instead (no failures). Signals into guest threads are not harmless: the watchdog's SIGUSR2
+  dump is the same kind of interruption (CLAUDE.md: it derails a worker).
+
+**Encoders and render-pass splits.** `BB_ENCODER_STATS=1`, city at 1440p MetalFX, per frame:
+~372 Metal encoders: 95 render passes started at pass boundaries, 23 after EndEncoding, **67
+render passes split "after compute"**, 67 compute encoders opened inside a pass, ~24 compute and
+~24 blit after ordering waits, ~32 blits after compute. All 67 in-pass computes come from
+`Runs::DrawTessellated` (the vertex and control stages as compute kernels): tessellated draws
+sit between ordinary draws, so each run ends the pass, runs its kernels and reopens the pass
+with Load (a store and reload of the attachments on Apple's GPU). Upper bound, tessellated draws
+skipped entirely (scratch switch, not kept), uncapped: GPU busy 6.60 / 7.49 -> 5.66 / 5.55
+ms/frame, encoders 237 / 228 -> 155 / 154. Tessellation (kernels, patch draws and splits) is
+15-25% of the city's GPU frame; hoisting the kernels out of the pass saves part of it
+(MACOS_BACKLOG, Performance).
+
+**First session after updating** (a copy of a 0.5.3-era store, 649 pipelines, then a 10-minute
+Hemwick walk): the store cleared once ("649 pipelines of an older cache format"), 334 pipelines
+compiled during the walk, the archive wrote 9 times (writes now spaced to 20x their duration;
+the earlier cold walk wrote 15 times), 60 FPS mean, 14 game-side spikes in the minute entering
+the area and 5 visible ones (late flip or present) over the remaining 9 minutes. A one-time cost
+per player; the next start preloads.

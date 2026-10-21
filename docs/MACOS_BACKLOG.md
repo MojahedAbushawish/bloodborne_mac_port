@@ -21,6 +21,19 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Signals into guest threads break the game (2026-10-21).** SIGPROF sent to the main thread
+  every 1 ms (a sampler's first version) made texture streaming fail every time within minutes
+  (`CSGXTextureCreateFragment.cpp(137)` panic, then the game's deliberate null write), even with
+  a handler that made no system call. The watchdog's stack dump (`probe.c` `dump_frames`,
+  SIGUSR2 to every thread) is the same kind of interruption, which fits CLAUDE.md's "the
+  BB_TIMEOUT stack dump derails a worker". Cause not found (an interrupted wait or syscall the
+  runtime passes on as an error is the suspect). *Fix:* dump stacks by suspending threads and
+  reading their state (as `runtime_sampler.c` now does), not with signals.
+- **`mtl-encoder-test` fails on an M2 (#30, 2026-10-20).** Its timestamp check "the render
+  encoder's fragment end is sampled, after the blit" assumes the M4's sampling points; on an M2
+  Max it fails and stops `build_macos.sh --test`. Make the check depend on the counter sampling
+  points the device reports, or skip it where they differ.
+
 - **Metal-native: world geometry missing after long play (Hemwick graveyard, user's 0.4.5 test,
   2026-10-17).** After a long session a large rock wall and the terrain behind it drew as a flat
   fog-coloured hole; quit to menu and load restored them. Suspects: a missed CPU write to guest
@@ -428,6 +441,20 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 2. Performance
 
+- **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
+  pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
+  tessellated draws encodes its vertex and control kernels in a compute encoder, so the pass
+  ends and reopens with Load (a store and reload of every attachment). Tessellated draws are
+  15-25% of the city's GPU frame (skipped: 6.6-7.5 -> 5.6 ms/frame, 83 fewer encoders;
+  FINDINGS 2026-10-21); the splits are part of that. *Fix:* encode a pass's tessellation
+  kernels before its render encoder opens. Needs the pass's commands ahead (stage B would hold a
+  render pass until its end, or stage A records tessellated draws' kernel work in a pre-pass
+  list) and a conflict check: a copy-shader copy or storage write earlier in the same pass to a
+  range a kernel reads (vertex streams, constants) keeps that run in place, as deferred copies
+  do for their ranges. Check with screenshots of the cobblestones and other tessellated
+  geometry, `BB_ENCODER_STATS` and GPU time; fewer encoders also means fewer ordering waits
+  (~1700 a frame).
+
 - **x86-64 GPU library: trim to the remote shim (M7 leftover, 2026-10-19).** The game process
   loads an x86-64 libbbgpu that only runs in remote mode, yet it compiles the whole Metal
   renderer, FSR 3.1 (FidelityFX host code), MetalFX, ImGui and SPIRV-Cross (so bootstrap still
@@ -528,6 +555,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   work per write, possibly contending with live compiles, and longer than the 5 s exit-flush
   bound (`bbgpu_flush_caches` then gives up, logged; the old file stays). The "wrote N pipelines"
   line now logs the duration: check it on a 16 GB / 8-core Mac in M5; grow the interval with N.
+  **Spaced 2026-10-21:** writes wait at least 20 times the last one's duration (~5% of one
+  core; `kWriteSpacing`). *Still:* an incremental archive (a second file for this session's
+  new pipelines, both given to `binaryArchives`) would make each write proportional to the new
+  pipelines only.
   Seen 2026-10-18 on the M4 Max: quitting after character creation logged "the pipeline archive
   write did not finish within 5000 ms; exiting without it" (pipelines from that session recompile
   next launch). Later the same evening (M4 Max, 0.5.1, on battery): **12–14 s per write at
