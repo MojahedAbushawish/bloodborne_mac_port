@@ -17,7 +17,7 @@ process.
 
 ## Status (2026-10-21)
 
-**Current version: [mac-v0.5.4](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4)** (download the app, or build it as below).
+**Current version: [mac-v0.5.4.1](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4.1)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -27,6 +27,13 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+### New in 0.5.4.1: missing trees
+
+- **Trees and other objects that never drew are back** (#35). The Metal renderer skipped every
+  tessellated draw with more than one instance, which some areas use for whole trees: in the
+  Forbidden Woods, about 1,900 draws every 5 seconds were dropped. Each instance is now drawn on
+  its own; 60 FPS holds there on an M4 Max.
 
 ### New in 0.5.4: the biggest speed-up since native Metal
 
@@ -224,9 +231,10 @@ the log.
 
 ### Known issues
 
-- **Missing geometry** (floors, walls, props vanishing until a reload): the main cause, Metal's
-  32-bit index offsets, is fixed in 0.5.4. Some smaller pop-in of objects remains (#35): reports
-  with a screenshot and `game.log` welcome.
+- **Missing geometry:** floors, walls and props vanishing until a reload (Metal's 32-bit index
+  offsets) are fixed in 0.5.4, and trees and other instanced tessellated objects that never drew
+  (Forbidden Woods, #35) in 0.5.4.1. If something still goes missing, reports with a screenshot
+  and `game.log` are welcome on #35.
 - **Occasional judder at a steady 60 FPS** (some game frames take 20–45 ms): much rarer since
   2026-10-15 (about 6x fewer late frames).
 - **Uncapped, an occasional single long frame** (20–40 ms) on the Metal renderer; capped play

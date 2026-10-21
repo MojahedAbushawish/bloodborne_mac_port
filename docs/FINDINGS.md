@@ -1653,3 +1653,15 @@ shell restart tests, settings-preservation and native scene-target roundtrips pa
 broader build_macos.sh --test run stops at the unchanged mtl-encoder-test timestamp check
 "the render encoder's fragment end is sampled, after the blit" on this M2; the Metal
 encoder sources and that test are identical to master. No full-suite pass is claimed.
+
+## Instanced tessellated draws were skipped: missing trees (2026-10-21, late)
+
+After 0.5.4 the user still saw objects vanish. The log had `Metal draws skipped in the last 5 s:
+tessellation 300-2100` and `instanced tessellated draws are not encoded (skipped)`: the Metal
+renderer skipped every tessellated draw with more than one instance (since 0.5.0). The test scenes
+(Central Yharnam, Hunter's Dream) never issue one, so no test saw it. On a copy of the user's save
+(Forbidden Woods) at 1080p, 60 cap: with `BB_TESS_INSTANCES=0` (skipped, as before) ~1900 skipped
+draws per 5 s and the large mossy tree trunks around the player missing; with each instance drawn
+as its own tessellated draw (own kernels and scratch, instance number in the vertex kernel's
+stage-in region and the patch draw's base instance) no skips, the trees drawn, 60 FPS held (worst
+frame 17.7 ms standing). City unchanged (no instanced tessellated draws there).
