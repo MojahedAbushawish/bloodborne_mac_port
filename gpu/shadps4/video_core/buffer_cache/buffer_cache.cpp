@@ -20,6 +20,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
+#include "video_core/renderer_metal/mtl_buffer.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -394,6 +395,11 @@ std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, 
     const auto [buffer, offset] = ObtainBuffer(device_addr, size, false);
     constexpr u64 IndexOffsetLimit = u64{1} << 32;
     if (offset < IndexOffsetLimit && size <= IndexOffsetLimit - offset) {
+        return {buffer, offset};
+    }
+    // bbport: the encoder draws through a window of the arena at a low offset (Metal::LowOffset),
+    // without a copy, when the arena has CPU contents (BB_ARENA_LAZY, the default).
+    if (Metal::CanLowerOffsets(buffer->Ref().buffer)) {
         return {buffer, offset};
     }
     // The bytes in the arena are correct, but drawIndexedPrimitives fetches from the

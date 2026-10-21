@@ -113,6 +113,8 @@ public:
 
     /// Metal's indexed draw path truncates offsets above 4 GiB on M2 (observed).
     /// Rebase those ranges into fence-managed staging; preserve GPU-written indices.
+    /// bbport: only for an arena without CPU contents; otherwise the encoder draws through a
+    /// window of the arena (Metal::LowOffset) and the arena range is returned.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainIndexBuffer(VAddr device_addr, u32 size);
 
     /// Attempts to obtain a buffer without modifying the cache contents.

@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/renderer_metal/mtl_buffer.h"
 #include "video_core/renderer_metal/mtl_device_impl.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 
@@ -1374,6 +1375,7 @@ void Encoder::Dispatch(Size3 groups, Size3 threads_per_group) {
 
 void Encoder::DispatchIndirect(BufferRef args, Size3 threads_per_group) {
     ASSERT_MSG(impl->compute_pipeline, "Dispatch without a compute pipeline");
+    args = LowOffset(args); // 32-bit indirect offsets (mtl_buffer.h)
     impl->ApplyCompute();
     [impl->compute dispatchThreadgroupsWithIndirectBuffer:(__bridge id<MTLBuffer>)args.buffer
                                      indirectBufferOffset:args.offset
@@ -1586,6 +1588,7 @@ void Encoder::Draw(Primitive primitive, u32 vertex_count, u32 instance_count, u3
 void Encoder::DrawIndexed(Primitive primitive, u32 index_count, IndexType type, BufferRef indices,
                           u32 instance_count, s32 base_vertex, u32 first_instance) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    indices = LowOffset(indices); // 32-bit index offsets (mtl_buffer.h)
     impl->ApplyRender();
     [impl->render drawIndexedPrimitives:ToMtl(primitive)
                              indexCount:index_count
@@ -1601,6 +1604,7 @@ void Encoder::DrawIndexed(Primitive primitive, u32 index_count, IndexType type, 
 
 void Encoder::DrawIndirect(Primitive primitive, BufferRef args) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    args = LowOffset(args); // 32-bit indirect offsets (mtl_buffer.h)
     impl->ApplyRender();
     [impl->render drawPrimitives:ToMtl(primitive)
                   indirectBuffer:(__bridge id<MTLBuffer>)args.buffer
@@ -1611,6 +1615,8 @@ void Encoder::DrawIndirect(Primitive primitive, BufferRef args) {
 void Encoder::DrawIndexedIndirect(Primitive primitive, IndexType type, BufferRef indices,
                                   BufferRef args) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    indices = LowOffset(indices); // 32-bit index and indirect offsets (mtl_buffer.h)
+    args = LowOffset(args);
     impl->ApplyRender();
     [impl->render drawIndexedPrimitives:ToMtl(primitive)
                               indexType:type == IndexType::U32 ? MTLIndexTypeUInt32
@@ -1666,6 +1672,7 @@ void Encoder::DrawIndirectCount(Primitive primitive, BufferRef args, u32 stride,
 void Encoder::DrawPatches(u32 control_points, u32 patch_start, u32 patch_count,
                           BufferRef patch_index_buffer, u32 instance_count, u32 base_instance) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    patch_index_buffer = LowOffset(patch_index_buffer); // 32-bit offsets (mtl_buffer.h)
     impl->ApplyRender();
     [impl->render drawPatches:control_points
                    patchStart:patch_start

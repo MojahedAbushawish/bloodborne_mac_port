@@ -14,6 +14,7 @@
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/renderer_metal/mtl_buffer.h"
 
 namespace Core {
 class Emulator {
@@ -115,8 +116,10 @@ int main() {
                 RenderIndexTriangle(device, raw->Ref(raw_offset)) ? "visible" : "MISSING");
     const auto [safe, safe_offset] = cache.ObtainIndexBuffer(high_indices, Size);
     scheduler.Finish();
-    Check(safe_offset + Size <= (1ull << 32), "CPU index binding stays below 4 GiB");
-    Check(RenderIndexTriangle(device, safe->Ref(safe_offset)), "high CPU-owned indices render correctly");
+    // The encoder draws through Metal::LowOffset (a window of the arena, no copy).
+    const Metal::BufferRef safe_ref = Metal::LowOffset(safe->Ref(safe_offset));
+    Check(safe_ref.offset + Size <= (1ull << 32), "CPU index binding stays below 4 GiB");
+    Check(RenderIndexTriangle(device, safe_ref), "high CPU-owned indices render correctly");
     const uintptr_t high_gpu = HighBase + 13 * Size;
     std::memset(reinterpret_cast<void*>(high_gpu), 0, Size);
     const auto [gpu_indices, gpu_index_offset] = cache.ObtainBuffer(high_gpu, Size, true);
@@ -125,8 +128,9 @@ int main() {
     const auto [safe_gpu, safe_gpu_offset] = cache.ObtainIndexBuffer(high_gpu, Size);
     scheduler.Finish();
     Check(reinterpret_cast<u16*>(high_gpu)[1] == 0, "GPU index test keeps the CPU mirror stale");
-    Check(safe_gpu_offset + Size <= (1ull << 32), "GPU index binding stays below 4 GiB");
-    Check(RenderIndexTriangle(device, safe_gpu->Ref(safe_gpu_offset)), "high GPU-produced indices render correctly");
+    const Metal::BufferRef gpu_ref = Metal::LowOffset(safe_gpu->Ref(safe_gpu_offset));
+    Check(gpu_ref.offset + Size <= (1ull << 32), "GPU index binding stays below 4 GiB");
+    Check(RenderIndexTriangle(device, gpu_ref), "high GPU-produced indices render correctly");
     const auto [low, low_offset] = cache.ObtainBuffer(Base + 14 * Size, Size, false);
     const auto [low_index, low_index_offset] = cache.ObtainIndexBuffer(Base + 14 * Size, Size);
     Check(low == low_index && low_offset == low_index_offset, "low index bindings retain the existing path");
