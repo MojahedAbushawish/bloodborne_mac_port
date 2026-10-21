@@ -223,6 +223,7 @@ struct PatchDraw {
     BufferRef factors{}; ///< tessellation factors (kTessFactorBuffer, factor buffer)
     u32 patches{};
     u32 output_control_points{};
+    u32 instance{}; ///< the instance this patch draw stands for (its base instance)
 };
 
 /// The skip counters already reported (DescribeSkips).
