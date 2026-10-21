@@ -65,6 +65,7 @@ do {
     check(!defaults.objectMotion && defaults.liveResolution == .off && defaults.effects["debug_camera"] == false && defaults.effects["debug_menu"] == false, "default advanced, debug")
     check(defaults.effects["effect_dof"] == true && defaults.effects["effect_ssr"] == false && defaults.effects["skip_intro"] == false, "default effects")
     check(defaults.sharpen && defaults.sharpness == 0.3 && !defaults.showFPS && !defaults.metalHUD && defaults.shaderCompile == .balanced, "default extras")
+    check(defaults.textureCompression && !GameSettings(ini: IniFile(text: "texture_compression=0\n")).textureCompression, "texture compression: default on, read")
 
     let read = GameSettings(ini: IniFile(text: "upscaler=metalfx\npreset=2\noutput_res=2560x1440\nfps_cap=40\nfullscreen=1\neffect_dof=0\nshow_fps=1\nmetal_hud=1\nrenderer=metal\nshader_compile=skip\nsharpness=0.75\n"))
     check(read.upscaler == .metalfx && read.preset == 2 && read.output == PixelSize(2560, 1440), "read display")
@@ -99,6 +100,7 @@ do {
     check(file["model_lod"] == "2" && file["live_resolution"] == "auto" && file["debug_menu"] == "1" && file["jitter"] == "0", "apply advanced keys")
     check(file["reactive_scale"] == "1.00" && file["reactive_threshold"] == "0.20" && file["reactive_max"] == "0.90" && file["object_motion"] == "0", "apply reactive keys")
     check(file["metal_hud"] == "1", "apply writes the Metal HUD key")
+    check(file["texture_compression"] == "1", "apply writes the texture compression key")
     check(file.text.hasPrefix("# header\n"), "header kept")
     // Review focus 3: reloading after the game's menu changed the file picks up its values.
     file["preset"] = "3"

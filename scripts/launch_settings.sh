@@ -4,18 +4,22 @@
 #                            (BB_FPS_LIMIT); the game keeps run.sh's default frame rate patch
 #   fullscreen=1             the window opens full screen (BB_FULLSCREEN=1)
 #   metal_hud=1              Apple's Metal Performance HUD (MTL_HUD_ENABLED=1)
+#   texture_compression=0    textures keep every usage, no lossless compression
+#                            (BB_LAZY_TEXTURE_USAGE=0; default 1, compressed)
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
-    local line cap='' full='' hud=''
+    local line cap='' full='' hud='' compress=''
     [[ -f $1 ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
         line=${line%$'\r'}
         if [[ $line =~ ^fps_cap=(30|40|60|90|120)$ ]]; then cap=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^fullscreen=([01])$ ]]; then full=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^metal_hud=([01])$ ]]; then hud=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
     done < "$1"
     if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
     if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
     if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1; fi
+    if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0; fi
     return 0
 }
