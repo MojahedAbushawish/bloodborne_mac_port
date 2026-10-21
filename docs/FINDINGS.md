@@ -1593,3 +1593,34 @@ ms/frame), `BB_FRAMES_AHEAD` 1 (default) vs 2, two runs each: with 1, pacing std
 worst frame 16.7 ms standing and turning in every run; with 2, turning had worst frames of 31-33
 ms and stddev 1.1-1.5 ms. More frames ahead does not absorb heavy frames here, it bunches them;
 the default stays 1.
+
+## Metal's 32-bit index and indirect offsets; texture compression on an M4 Max (2026-10-21, evening)
+
+**Vanishing geometry (#36, #35, #18).** DiAvisoo found that indexed draws more than 4 GiB into the
+guest arena drew nothing on an M2 Max. Plain Metal probes (no port code) on the M4 Max:
+
+| Command, offset into a 8 GiB no-copy buffer | below 4 GiB | 4 GiB + x |
+|---|---|---|
+| `drawIndexedPrimitives` (`indexBufferOffset`), direct and indirect | correct | reads at x |
+| `drawPrimitives:indirectBuffer:` (`indirectBufferOffset`) | correct | reads at x |
+| vertex/fragment/compute `set*Buffer:offset:` read by the shader | correct | correct |
+| any of the above through a second no-copy buffer over the same pages, low offset | correct | correct |
+
+(A first probe wrongly blamed shader buffer bindings: its "drawn" check was always true and the
+failure was the indirect arguments.) Fix: `Metal::LowOffset` (`mtl_buffer.mm`) draws indexed,
+indirect and patch draws and indirect dispatches from 3.5 GiB on through a window, a second
+`MTLBuffer` over the arena's pages, 1 GiB long every 512 MiB. Metal counts a window's whole length
+in `currentAllocatedSize` (the Metal HUD's "Metal" figure) without any memory: a 4 GiB window
+added 4 GiB there with the footprint unchanged (0.50 → 0.50 GiB), and the first version (4 GiB
+windows from 2 GiB on) showed ~4.2 GB more in the HUD in play with App memory equal. Normal play
+reached the 2–4 GiB range in every test run; beyond 4 GiB needs streaming through areas.
+
+**Texture compression (#33) on the M4 Max**, compression off (`BB_LAZY_TEXTURE_USAGE=0`) vs on,
+alternating, uncapped (presenter limit 120): Hunter's Dream 1440p native 101.7 / 102.0 / 102.1 →
+119.6 / 119.8 / 119.8 (at the limit); Central Yharnam 1080p 120 both. Screenshots: off-vs-on
+differences equal off-vs-off (swaying flowers, fog); overall brightness overlaps across runs.
+`MTL_DEBUG_LAYER=1` play runs clean in both scenes. 3–9 upgrades per run, at load, 14–35 MB.
+
+**The user's play session, 0.5.3 → 0.5.4 (invariant default + compression + windows)**, Hemwick,
+full screen 4K native, Metal HUD: 51.3 FPS / GPU 20.1 ms → 70.1 / 14.9; another view 80.7 / 12.6
+→ 109.1 / 9.3.

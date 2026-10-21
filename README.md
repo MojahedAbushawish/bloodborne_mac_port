@@ -15,17 +15,69 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-19)
+## Status (2026-10-21)
 
-**Current version: [mac-v0.5.2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.2)** (download the app, or build it as below).
+**Current version: [mac-v0.5.4](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
-saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, or upscaled with
-MetalFX, FSR 3.1 or TAA, through its own **native Metal renderer**. Expect occasional rendering
-glitches (see [Known issues](#known-issues)).
+saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
+**4K native too** (70 FPS uncapped in Hemwick), or upscaled with MetalFX, FSR 3.1 or TAA,
+through its own **native Metal renderer**. Expect occasional rendering glitches (see
+[Known issues](#known-issues)).
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+### New in 0.5.4: the biggest speed-up since native Metal
+
+The same spot in Hemwick Charnel Lane, M4 Max, full screen, upscaler off, frame rate uncapped,
+read from Apple's Metal Performance HUD:
+
+| Output | 0.5.3 | 0.5.4 | |
+|---|---|---|---|
+| 4K native (3840×2160) | 51.3 FPS, GPU 20.1 ms | **70.1 FPS, GPU 14.9 ms** | **+37%** |
+| 4K native, another view | 80.7 FPS, GPU 12.6 ms | **109.1 FPS, GPU 9.3 ms** | **+35%** |
+
+And in alternating test runs (M4 Max, uncapped; the presenter stops at 120 FPS):
+
+| Scene | Before | After |
+|---|---|---|
+| Hunter's Dream, 1440p native, texture compression off → on | 101.7–102.1 | **119.6–119.8** (at the 120 limit, so at least +18%) |
+| Hunter's Dream, 1440p native, invariant positions (below) | 85.7 | **98.9** (+15%) |
+| M3 Pro 18 GB, compression off → on ([@MojahedAbushawish](https://github.com/MojahedAbushawish)) | 37.6 / 49.7 / 28.5 | **44.3 / 62.2 / 40.2** (+18% / +25% / +41%) |
+
+GPU time is what decides whether a slower Mac holds 60 FPS (16.7 ms per frame), so these gains
+matter most on base and Pro chips. What changed:
+
+- **Lossless texture compression** (from [@MojahedAbushawish](https://github.com/MojahedAbushawish), #33).
+  Apple GPUs compress textures and render targets without any loss, but only when they are
+  created without two usage flags. Every texture had both, so nothing was compressed and memory
+  bandwidth was the largest cost of a frame. Textures now get those flags only when something
+  needs them. Launcher: Advanced → Performance → **Texture compression** (on; turn it off if you
+  see wrong colours or broken textures).
+- **Invariant positions instead of precise math in vertex shaders** (from Mojahed's #20). Positions
+  stay identical between passes through Metal's invariance, without the precise-math mode that
+  blocked the shader compiler's optimisations. The shader cache rebuilds once after updating.
+- **Vanishing floors, walls and props fixed** (found by [@DiAvisoo](https://github.com/DiAvisoo), #36; #35, #18).
+  Metal's indexed and indirect draws use only the low 32 bits of their buffer offset, on every
+  Apple GPU tested (M2 Max, M4 Max): when streaming placed a large mesh more than 4 GiB into the
+  game's GPU memory, the draw read the wrong data and the mesh disappeared until a reload. Such
+  draws now go through a second Metal buffer over the same memory, at a low offset, with no copy.
+- **Smoother full screen** (#25): three frame buffers instead of two in full screen, where macOS
+  shows the game's frames directly. Late frames per test run: 10–18 → 0–2.
+- **Optional frame pacing** (in-game menu: Display → Frame pacing): each frame stays on screen for
+  one period of the FPS cap, for even motion on ProMotion displays, at the cost of about one
+  frame of input latency. Off by default.
+- The pipeline archive is written less often while many new shaders appear (less competition with
+  the game on Macs with fewer cores).
+
+### New in 0.5.3: fixes, crash reports
+
+- **The black loading screen** (#18, found by Mojahed in #20) and **very low frame rates on 16 GB
+  Macs** with an upscaler or at 720p (#22, #19) are fixed.
+- **Crash reports:** the launcher shows what happened and opens a GitHub issue with the log.
+- **Advanced tab** in the launcher (#15); +5–15% FPS from deferred copies and 10–22% less CPU
+  (Mojahed's #20); MoltenVK and the Vulkan loader are gone from the app.
 
 ### Benchmarks: 0.4.0 → 0.5.0
 
@@ -62,6 +114,9 @@ got it to 60 and beyond, in order:
 | 0.3.1 | **MoltenVK encodes while we record** (prefilled Metal command buffers) instead of encoding the whole frame inside the flip's submit (~13 ms) | Judder: late game frames **~6× fewer**; the "solid 60" feel |
 | 0.3.3 | **No Metal argument buffers in MoltenVK** (push descriptors bound directly; the tip came from [Huax-1839/bloodborne-macos](https://github.com/Huax-1839/bloodborne-macos)) | **+13–16%** everywhere: 1080p native 82 → 94, 1440p native 59 → 66 (above 60 for the first time), FSR/MetalFX 92 → 107 |
 | 0.5.0 | **Native Metal renderer.** The video core encodes Metal directly (no Vulkan, no MoltenVK): untracked guest buffers with our own ordering, a pipeline archive kept between sessions, MetalFX on our own textures, FSR 3.1 through a Metal back end for AMD's FidelityFX interface | **1440p native 69.5 → 82.0**, FSR 3.1 Quality 1080p **108 → 120** (Hunter's Dream; table above) |
+| 0.5.3 | **Copies inside a render pass wait until it ends** (Mojahed, #20) | +5–7% at 1440p, up to +15% at 1080p |
+| 0.5.4 | **Invariant positions** instead of precise vertex math (Mojahed, #20) | Hunter's Dream 1440p **85.7 → 98.9** |
+| 0.5.4 | **Lossless texture compression** (Mojahed, #33) | Hunter's Dream 1440p **102 → 120** (cap); 4K native in Hemwick **51 → 70** together with the line above |
 
 Also fixed along the way: a MoltenVK crash from two threads sharing one command pool, and
 geometry corruption at 1440p (scenes above 1080p now use live resolution changes).
@@ -165,9 +220,9 @@ the log.
 
 ### Known issues
 
-- **Missing geometry after a respawn or reload** (character's legs, a flight of stairs, a
-  floor), reported on an M4 Max and an M2 Pro; a relaunch brings it back. It coincided with the
-  load race below, now fixed, so it may be gone: reports welcome.
+- **Missing geometry** (floors, walls, props vanishing until a reload): the main cause, Metal's
+  32-bit index offsets, is fixed in 0.5.4. Some smaller pop-in of objects remains (#35): reports
+  with a screenshot and `game.log` welcome.
 - **Occasional judder at a steady 60 FPS** (some game frames take 20–45 ms): much rarer since
   2026-10-15 (about 6x fewer late frames).
 - **Uncapped, an occasional single long frame** (20–40 ms) on the Metal renderer; capped play
@@ -177,14 +232,12 @@ the log.
 
 ### What's next
 
-- **0.5.3: cleanup** (done): MoltenVK, the Vulkan loader and the unused FSR 4 code are gone
-  from the app, a 4.5 MB smaller download (51.3 → 46.7 MB). Next for 0.5.3: keyboard and mouse
-  controls.
-- **Fewer Metal render passes.** Profiling found ~408 Metal encoders per frame (190 render
-  passes). Each extra render pass costs ~13–16 µs of GPU time on Apple GPUs regardless of
-  resolution — about 3 ms per frame — and leaves the GPU idle in periodic gaps. Merging passes
-  is the main lever for 1440p and 4K at 60.
-- Confirm the missing-geometry reports are gone; the frame-time judder.
+- **Fewer Metal render passes.** In Central Yharnam, tessellated draws split the render pass
+  67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
+  bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
+  (Mojahed's #39 starts on it).
+- Keyboard and mouse controls (mouse look, from #20); native ultrawide (#30).
+- Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
 Details:
