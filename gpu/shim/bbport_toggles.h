@@ -54,6 +54,9 @@ enum : std::uint64_t {
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
     UpdateImageFastPath = 1u << 30,
+    /// A draw whose attachments are a subset of the open render pass's draws in it
+    /// (Rasterizer::MergeIntoOpenPass; BB_MERGE_PASSES=0: off); bit set: it begins its own pass.
+    PassMerge = 1ull << 31,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,
     TaaClip = 1ull << 52,
@@ -111,6 +114,9 @@ inline std::atomic<std::uint64_t> hoisted_shader_copies{0}, inline_shader_copies
 inline std::atomic<std::uint64_t> deferred_shader_copies{0}, deferred_copy_conflicts{0};
 /// bbport: draws not recorded because they can have no effect (SkipNoOpDraws).
 inline std::atomic<std::uint64_t> noop_draws{0};
+/// bbport: draws recorded into the open render pass with a pipeline variant (MergeIntoOpenPass),
+/// and the variants built.
+inline std::atomic<std::uint64_t> merged_draws{0}, pass_variants{0};
 /// bbport: arena ordering requests recorded (Runtime::FlushBarriers: commands waiting for
 /// render passes, and the others), and uploads not hoisted because their ranges were in use by
 /// a submission in flight.
