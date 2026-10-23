@@ -3,6 +3,7 @@
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include <sys/resource.h>
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include <algorithm>
 #include <atomic>
@@ -154,6 +155,16 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
 }
 void AddressSpace::Protect(VAddr virtual_addr, u64 size, MemoryPermission perms) {
     BbStats::Timer timer{BbStats::t_protect};
+    // bbport: per calling thread (bbport_stutter.h).
+    struct ByThread {
+        u64 start = BbStats::enabled ? BbStutter::NowNs() : 0;
+        bool revoke;
+        ~ByThread() {
+            if (start) {
+                BbStutter::NoteProtect(BbStutter::NowNs() - start, revoke);
+            }
+        }
+    } by_thread{.revoke = !True(perms & MemoryPermission::Write)};
     const u64 pages = (size + 4095) / 4096;
     BbStats::protect_calls.fetch_add(1, std::memory_order_relaxed);
     BbStats::protect_pages.fetch_add(pages, std::memory_order_relaxed);
@@ -317,7 +328,23 @@ extern "C" int bbgpu_host_fault(uint64_t address, int write) {
     }
     if (write) {
         BbStats::Timer timer{BbStats::t_write_faults};
-        return rasterizer->OnWriteFault(address, false) ? 1 : 0;
+        if (!BbStats::enabled) {
+            return rasterizer->OnWriteFault(address, false) ? 1 : 0;
+        }
+        // bbport: where the fault thread's time goes (bbport_stutter.h).
+        const BbStutter::ScopedClass fault_thread{BbStutter::Fault};
+        BbStutter::tls_protect_ns = BbStutter::tls_readback_ns = BbStutter::tls_texture_lock_ns = 0;
+        const u64 start = BbStutter::NowNs();
+        const int handled = rasterizer->OnWriteFault(address, false) ? 1 : 0;
+        const u64 ns = BbStutter::NowNs() - start;
+        auto& f = BbStutter::faults;
+        f.faults.fetch_add(1, std::memory_order_relaxed);
+        f.ns.fetch_add(ns, std::memory_order_relaxed);
+        BbStutter::AtomicMax(f.max_ns, ns);
+        f.readback_ns.fetch_add(BbStutter::tls_readback_ns, std::memory_order_relaxed);
+        f.protect_ns.fetch_add(BbStutter::tls_protect_ns, std::memory_order_relaxed);
+        f.texture_lock_ns.fetch_add(BbStutter::tls_texture_lock_ns, std::memory_order_relaxed);
+        return handled;
     }
     BbStats::read_faults.fetch_add(1, std::memory_order_relaxed);
     BbStats::Timer timer{BbStats::t_read_faults};
