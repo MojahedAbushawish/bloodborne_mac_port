@@ -832,7 +832,8 @@ void VideoOutDriver::Flip(const Request& req) {
                             "vkQueueSubmit %.2f in %.1f calls; command thread waiting for "
                             "recording %.2f; flip submit -> GPU done %.2f, GPU done every %.2f; "
                             "per frame %.1f tessellated, %.1f rect/quad-list draws, "
-                            "%.1f no-op draws skipped; hoisted "
+                            "%.1f no-op draws skipped, %.1f draws merged into open passes "
+                            "(%llu variants); hoisted "
                             "%.1f uploads, copy shader %.1f hoisted / %.1f inline / %.1f deferred (%.1f "
                             "conflicts); arena ordering "
                             "requests %.1f naming render passes, %.1f others; %.1f not hoisted (in "
@@ -842,6 +843,8 @@ void VideoOutDriver::Flip(const Request& req) {
                             gpu_latency, gpu_gap, double(BbStats::tess_draws.exchange(0)) / frames,
                             double(BbStats::rect_draws.exchange(0)) / frames,
                             double(BbStats::noop_draws.exchange(0)) / frames,
+                            double(BbStats::merged_draws.exchange(0)) / frames,
+                            static_cast<unsigned long long>(BbStats::pass_variants.load()),
                             double(BbStats::hoisted_copies.exchange(0)) / frames,
                             double(BbStats::hoisted_shader_copies.exchange(0)) / frames,
                             double(BbStats::inline_shader_copies.exchange(0)) / frames,
