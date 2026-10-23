@@ -7,14 +7,31 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
+    private enum Page: Hashable { case general, advanced }
+    @State private var page = Page.general
+
     var body: some View {
         VStack(spacing: 0) {
-            // Two tabs of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
+            // Two pages of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
             // points, Dock shown) without scrolling, even with every optional row showing.
-            TabView {
-                general.tabItem { Text("General") }
-                advanced.tabItem { Text("Advanced") }
+            // Not a TabView: on macOS 26.0.1 switching back to a tab re-inserts its cached view
+            // graph and SwiftUI's accessibility nodes loop on a dependency cycle, printing it
+            // forever with the window frozen (#47, sampled by the reporter).
+            Picker("", selection: $page) {
+                Text("General").tag(Page.general)
+                Text("Advanced").tag(Page.advanced)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.top, 10)
+            Group {
+                switch page {
+                case .general: general
+                case .advanced: advanced
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
