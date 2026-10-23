@@ -15,9 +15,9 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-21)
+## Status (2026-10-23)
 
-**Current version: [mac-v0.5.4.1](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4.1)** (download the app, or build it as below).
+**Current version: [mac-v0.5.4.2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4.2)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -27,6 +27,14 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+### New in 0.5.4.2: GPU stall crashes fixed
+
+- **"The GPU stopped making progress" crashes, and the frame rate sinking over a session, are
+  fixed** (#42, #43, #44, #45, #49, #55). The extra Metal views of GPU memory added in 0.5.4 cost
+  no memory, but macOS's GPU driver counted each one as memory it had to keep in place, until it
+  paged on every frame and the GPU stalled. They are gone; meshes high in GPU memory are copied to
+  a small buffer instead (@DiAvisoo's original fix). Found and measured by @noelmiller.
 
 ### New in 0.5.4.1: missing trees
 
