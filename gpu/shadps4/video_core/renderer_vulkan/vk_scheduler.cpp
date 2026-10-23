@@ -462,6 +462,7 @@ void Scheduler::SyncRecording() {
 void Scheduler::RecorderThread(std::stop_token stoken) {
     Common::SetCurrentThreadName("bb:MtlRecorder");
     while (true) {
+        BbStutter::ApplyQos(); // user-interactive unless switched off (stutter plan phase 2)
         // Spin briefly before sleeping: the next chunk usually follows within microseconds,
         // and a sleeping recorder costs the GPU thread a wake-up syscall per kick. With few
         // hardware threads (Steam Deck: 8) the spin would take time from guest threads.

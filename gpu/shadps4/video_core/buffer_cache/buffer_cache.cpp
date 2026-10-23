@@ -166,6 +166,24 @@ void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
     BbCopy::QueueCopy(item);
 }
 
+bool BufferCache::InvalidateWriteFault(VAddr device_addr, u64 size) {
+    static const u64 window = [] {
+        const char* env = std::getenv("BB_FAULT_WINDOW");
+        const u64 kib = env ? std::strtoull(env, nullptr, 10) : 256;
+        return std::bit_ceil(std::clamp<u64>(kib, 4, 1024)) * 1024;
+    }();
+    if (window <= TRACKER_BYTES_PER_PAGE || BbToggle::Disabled(BbToggle::FaultWindow) ||
+        BbStutter::MergedFaultRelayOff() ||
+        (device_addr >> TRACKER_HIGHER_PAGE_BITS) !=
+            ((device_addr + size - 1) >> TRACKER_HIGHER_PAGE_BITS)) {
+        InvalidateMemory(device_addr, size, false);
+        return false;
+    }
+    return memory_tracker->InvalidateWriteFault(
+        device_addr, size, Common::AlignDown(device_addr, window), window,
+        [this, device_addr, size] { ReadMemory(device_addr, size, true, false); });
+}
+
 void BufferCache::ExtendWriteFault(VAddr device_addr) {
     static const u64 window = [] {
         const char* env = std::getenv("BB_FAULT_WINDOW");
