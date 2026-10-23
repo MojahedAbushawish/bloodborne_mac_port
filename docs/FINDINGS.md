@@ -1722,3 +1722,33 @@ runs again ("metalfx 1920x1080 -> 1920x1080 (HDR scene color)").
 
 Not checked: whether the jitter's direction is right on the Metal renderer (the player plays with
 jitter off; `BB_METALFX_JITTER_SIGN` exists for that test).
+
+## The memmove crash: the render thread's per-frame command pool (#34, #37, #38, #54, #57, 2026-10-23)
+
+Five reports, one site: guest 0x21d5b45, a NULL destination. Seen on macOS 26.5.1 and 27.0.1,
+M3 Max (36 and 128 GB) and M5 Pro, ports 0.5.3 to 0.5.4.1, always while characters spawn, with
+new pipelines compiling just before. It is not the Mac's memory.
+
+What the disassembly shows:
+- **The crash:** a draw command (0x21d5a80, run by a render job worker: 0x263b246 → 0x21b9841 →
+  0x21b7c02 → 0x294a400 → 0xec7470/0xec7c90) copies a 0x398-byte record into a 0x4d0-byte node
+  of the frame's command list, so it can run later on the render thread's immediate context.
+- **The allocation:** it comes from a chunked bump arena (0xe45560, minimum chunk 0x800) whose
+  parent is a 256 KiB linear heap per list. The renderer carves that heap once
+  (0x2195c09/0x2195c46). The heap's allocate (0xe453b0) returns NULL when full, and nothing
+  checks it.
+- **The flip** (0x2198fd0, once per frame) swaps the two lists and resets the other one's heap.
+  That's plain CPU code; no GPU or runtime signal is involved, and the pool doesn't leak.
+
+Measured with the new probe on the Forbidden Woods save (standing and turning, 60 FPS): a
+**peak of 8 KiB of 256 (3%)**, 73 of 216 records. A crashing frame is a rare spike of more
+than 30 times the normal load. Its cause is unknown.
+
+The fix (src/runtime_hooks.c, observer hooks: no lock):
+- The flip and the heap's allocate are hooked. The log gets the pool's high-water mark, and
+  each allocation that fails on a frame heap.
+- Such an allocation gets memory from a spare pool instead (16 MiB per frame heap, from the
+  low allocator). The spare pool is reused once the game resets that heap.
+- Checked with `BB_FRAME_POOL_TEST=2`, which treats everything past 2 KiB as failed. Every
+  frame went through the spare pool for about 8,700 frames: 60 FPS, the picture intact, and the
+  spare pool never full. `BB_FRAME_POOL=0` turns the hooks off.
