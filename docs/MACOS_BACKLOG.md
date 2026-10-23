@@ -701,6 +701,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Show the release version in the launcher (user, 2026-10-23).** Nothing in the window says
+  which build is installed, so players (and bug reports) can't tell 0.5.4.2 from 0.5.4.4 without
+  opening About. The bundle already carries it: `package_app.sh` writes `CFBundleShortVersionString`
+  (e.g. 0.5.4.4) and `CFBundleVersion` (the full tag version), and `LauncherModel.swift` reads the
+  short one for crash reports. Show "Version 0.5.4.4" in the bottom bar, next to "Show launcher
+  every time", with the full `CFBundleVersion` as its tooltip, and "development build" when the
+  key is missing (`make_app.sh` copies). Later: compare it with the latest GitHub release (PR #23,
+  auto-update).
+
 - **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
   text box opens in full screen, takes typing and Escape cancels, but the letters are not
   masked. Masking depends on the game setting `OrbisImeOption` PASSWORD (bit 4,
