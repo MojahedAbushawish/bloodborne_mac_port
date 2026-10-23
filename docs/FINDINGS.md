@@ -1682,3 +1682,43 @@ Checked: index test (copy path, windows path, Metal validation), 116 unit tests,
 Woods save (trees drawn, 60 FPS, no skips), the city (60), the Hunter's Dream 1440p uncapped
 (127 FPS standing). Indirect arguments above 4 GiB are unhandled again, as before 0.5.4.
 Lesson: "no extra memory" in the footprint is not "no extra wired budget" for the GPU driver.
+
+## Upscaler haze in motion: vertical motion vectors reversed (M3 Pro, 2026-10-22)
+
+A player's report: MetalFX at the Quality preset turns hazy while moving, pixels stay in place
+while new ones appear, sharp again after stopping; FSR 3.1 worse. MacBook Pro M3 Pro, macOS
+15.7.5, 1280x720 -> 1920x1080 (the tonemapped path, `RunScaled`).
+
+**Ruled out, one play session each** (the player's verdict):
+- motion blur and depth of field off: unchanged;
+- the game's own AA off: unchanged (a ping-pong temporal pass after tonemapping, which the
+  upscaler takes as its input; still worth skipping when upscaling);
+- FSR 3.1 instead of MetalFX: also hazy, worse. So the shared inputs, not MetalFX's setup.
+
+**Logged** (a logging build, per upscaled frame): the camera was found every frame; the motion
+vectors were 0.01 px with the camera still, grew with movement, and matched the rotation's
+prediction within 0.7-1.6x: present and the right size.
+
+**Found:** the logging build also saved the centre of the upscaler's input (256x144 grey) every
+frame. Phase correlation of consecutive frames gives how far the picture moved; the mean motion
+vector of the same region (previous minus current) should be its negative.
+
+| 491 / 1,275 frames moving > 3 px, lag 0 | horizontal error | vertical error | vertical, reversed |
+|---|---|---|---|
+| y-down reconstruction (before) | 1.76 px | 3.99 px | **0.77 px** |
+| y-up reconstruction (after) | 1.63 px | **0.90 px** | 6.06 px |
+
+Lags -2..+2 match worse than 0: the timing was right. Example frames before: picture moved -5.25 /
+-13.79 / +3.98 px vertically, the vectors said +4.86 / +13.20 / -4.18. The y-down convention was
+checked on MoltenVK on 2026-10-06; the native Metal renderer changed the picture's orientation under
+it. `taa.comp` already used y up. The object motion vectors (recompiler, through the viewport scale)
+have the picture's vertical sign (checked with object motion on); only the camera vectors were
+reversed. After the fix the player saw no haze with MetalFX or FSR.
+
+**Also found:** `TemporalUpscaler::Run` (Native AA, the live path above 1080p) returned silently when
+the scene colour had no ShaderWrite usage, which lazy texture usages never gave it: those modes ran
+without the upscaler. It now upgrades the scene colour once (16.7 MB at 1080p); MetalFX Native AA
+runs again ("metalfx 1920x1080 -> 1920x1080 (HDR scene color)").
+
+Not checked: whether the jitter's direction is right on the Metal renderer (the player plays with
+jitter off; `BB_METALFX_JITTER_SIGN` exists for that test).
