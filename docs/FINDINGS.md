@@ -1752,3 +1752,20 @@ The fix (src/runtime_hooks.c, observer hooks: no lock):
 - Checked with `BB_FRAME_POOL_TEST=2`, which treats everything past 2 KiB as failed. Every
   frame went through the spare pool for about 8,700 frames: 60 FPS, the picture intact, and the
   spare pool never full. `BB_FRAME_POOL=0` turns the hooks off.
+
+## Sinking through a lift: the uncapped frame rate patch (user report, 2026-10-23)
+
+The user died every time (4–5 tries) in one lift: the character sank through its floor and fell.
+The port always applied **Uncap FPS++** (`BB_FPS=uncap`, run.sh's default), which advances the
+game by each frame's measured time; its own note warns the timestep fixes vary with a
+fluctuating frame rate. At that spot (3840x2160 native, cap 60, M4 Max) frames alternated
+10 / 35 ms (`BB_FRAME_STATS=1`: 50–120 GPU page faults a frame, up to 30 ms waited). Same save
+with **60 FPS++** (`BB_FPS=60`, fixed 1/60 s steps): the lift worked. Frame pool peak in those
+sessions 15 of 256 KiB (memmove fix never needed).
+
+Change: bbport.ini `game_timing=fixed|variable` (launcher: General → Game timing; default
+fixed). `scripts/launch_settings.sh` picks BB_FPS from it and `fps_cap`: fixed gives the
+unpatched game at 30, 60 FPS++ at 60, 90 FPS++ (+ sprint fix) at 90; 40 and 120 have no
+fixed-step patch and stay on Uncap FPS++. Fixed steps run the game slightly slower when a scene
+can't hold the cap. An explicit BB_FPS still wins; a value picked by the launcher is re-picked
+after an in-game restart (BB_FPS_AUTO).
