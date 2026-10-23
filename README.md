@@ -28,6 +28,16 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
+### Pre-release 0.5.4.5: lifts no longer drop you through the floor
+
+- **Fixed game timing by default.** The port always advanced the game by each frame's measured
+  time, so on uneven frames the character could sink through a moving lift and die. At the 60
+  and 90 FPS caps the game now runs in fixed steps (the 60/90 FPS++ patches); 30 runs the game
+  unpatched, and 40 and 120 stay variable. If a scene can't hold the cap, the game slows down a
+  little instead. **Game timing** under the launcher's frame rate cap (`game_timing` in
+  `bbport.ini`) switches back to variable steps.
+- Everything from 0.5.4.4 below is included.
+
 ### Pre-release 0.5.4.4: memmove crash fixed
 
 - **The rare "memmove" crash is fixed** (#34, #37, #38, #54, #57). The game's render thread
