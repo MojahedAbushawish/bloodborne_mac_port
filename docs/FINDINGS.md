@@ -1496,3 +1496,30 @@ City, one session, switched every 30 s by the toggle file (2x30 s each): **60.85
 (+1.2%), GPU busy 16.34 -> 16.08 ms/frame**, encoders with fence waits 286 -> 273 per frame, CPU the
 same (~453% for both processes, 74 ms/frame). Snapshots 0.7 s apart: 0.45 between the modes, 0.64
 within one mode (mean absolute difference per channel, 0-255): no visible change.
+
+## Render passes merged when a draw uses a subset of the open pass's targets (M3 Pro, 2026-10-23)
+
+Lit passes and the HUD alternate between subsets of the same targets (lighting: colour + depth, then
+colour + a second colour + depth; HUD stencil masks: depth only, colour + depth, colour only). Each
+change stored and reloaded full 1080p targets. Now a draw whose attachments are a subset of the open
+pass (the same textures, levels and slices at the same slots, no clears, the same size and sample
+count, no object motion, no tessellation or geometry, no image stores, no feedback loop, none of the
+pass's targets sampled) is drawn in that pass with a variant of its pipeline: the pass's other
+attachments get their formats, an empty write mask and no blending; depth and stencil tests stay off
+through the draw's own state (`DynamicState::SetAttachments`). Variants are built on the pipeline
+creation pool; until one is ready the draw begins its own pass as before (no hitch).
+`BB_MERGE_PASSES=0` (or toggle bit 31) turns it off.
+
+One session per scene, switched every 30 s (2x30 s each), the no-op draw skip on in both:
+
+| Scene | Off | On | GPU busy ms/frame | Encoders with fence waits | CPU, both processes | Snapshots: between modes / within one |
+|---|---|---|---|---|---|---|
+| Central Yharnam, 1080p uncapped | 62.64 | **65.72 (+4.9%)** | 15.92 -> 15.16 | 272 -> 244 | 472% -> 501%, 75.3 -> 76.2 ms/frame | 0.44 / 0.63 |
+| Iosefka's Clinic lamp, 1080p | 48.75 | **51.10 (+4.8%)** | 20.51 -> 19.52 | 504 -> 482 | 365% -> 386%, 74.9 -> 75.5 ms/frame | 1.14 / 1.33 |
+
+- 57 variants in the city, 52 at the clinic; 350-860 draws per frame go into an open pass.
+- Metal API validation (`MTL_DEBUG_LAYER=1`, city, both modes): no errors.
+- Play session (the player's save copy, 4 min, uncapped, both on): 66.7 FPS on average, 180 variants,
+  no errors and no problems reported by the player.
+- CPU per frame +0.6-0.9 ms: merged draws miss the render-state memo and take the full
+  `BeginRendering` path.
