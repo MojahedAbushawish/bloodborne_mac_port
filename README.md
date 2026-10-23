@@ -28,6 +28,14 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
+### Pre-release 0.5.4.3: sharper upscaling in motion
+
+- **MetalFX and FSR 3.1 no longer turn hazy while moving** (#48, found and measured by
+  @MojahedAbushawish). The camera motion vectors pointed the wrong way vertically on the Metal
+  renderer, so the upscalers blended in history from the mirrored position.
+- **Native AA works again with texture compression on**: since 0.5.4 it, and upscaling above
+  1080p, silently ran without the upscaler.
+
 ### New in 0.5.4.2: GPU stall crashes fixed
 
 - **"The GPU stopped making progress" crashes, and the frame rate sinking over a session, are
