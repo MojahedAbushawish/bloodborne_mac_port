@@ -439,6 +439,11 @@ Each item: what was done for now, what the refinement is, and where it lives.
   allocations (~4.5 GB/h) and the 8 KiB class could hand out 64-byte blocks. Flat at 2.5 GB now.
   The same fix for 0.4.x is on branch `fix/low-alloc-free-list` (not merged). FINDINGS 2026-10-18.
 
+- **Indirect draw arguments above 4 GiB in the arena** (Metal uses 32-bit `indirectBufferOffset`;
+  index buffers are copied to staging instead, #36). Arena windows fixed both but stalled the GPU
+  queue through the driver's wired-memory accounting (#42; `BB_ARENA_WINDOWS=1`). Options: split
+  the arena into non-overlapping buffers of at most 4 GiB, or copy indirect records like indices.
+
 ## 2. Performance
 
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render

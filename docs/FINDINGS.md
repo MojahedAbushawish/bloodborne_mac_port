@@ -1665,3 +1665,20 @@ draws per 5 s and the large mossy tree trunks around the player missing; with ea
 as its own tessellated draw (own kernels and scratch, instance number in the vertex kernel's
 stage-in region and the patch draw's base instance) no skips, the trees drawn, 60 FPS held (worst
 frame 17.7 ms standing). City unchanged (no instanced tessellated draws there).
+
+## Arena windows stalled the GPU queue: off by default (2026-10-23)
+
+0.5.4 and 0.5.4.1 drew high index and indirect offsets through windows: no-copy `MTLBuffer`s over
+the arena's own pages. They add no memory, but the GPU driver counts each window's whole length
+as wired on top of the arena (noelmiller, #42, M5 Max 36 GB, macOS 27.0.1): command buffers asked
+for ~30.9 GB against `maxWired` 30.2 GB (`IOGPUCommandDescriptor::prepare: required > max`,
+~470,000 refusals an evening, starting exactly when a window was created). The driver paged on
+every submission until the queue stalled: GPU watchdog exits (#43, #44, #45, #49, all 0.5.4.1),
+WindowServer killed, once `bbgpu-host` stuck exiting and the GPU unusable until a reboot. With
+no windows (`BB_ARENA_LAZY=0`): zero refusals, nine co-op sessions without a crash.
+
+Windows are now off unless `BB_ARENA_WINDOWS=1`; high index ranges use #36's staging copy again.
+Checked: index test (copy path, windows path, Metal validation), 116 unit tests, the Forbidden
+Woods save (trees drawn, 60 FPS, no skips), the city (60), the Hunter's Dream 1440p uncapped
+(127 FPS standing). Indirect arguments above 4 GiB are unhandled again, as before 0.5.4.
+Lesson: "no extra memory" in the footprint is not "no extra wired budget" for the GPU driver.
