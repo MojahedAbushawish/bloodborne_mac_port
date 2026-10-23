@@ -1483,3 +1483,16 @@ Central Yharnam (the player's save, 1080p native, upscaler off, uncapped, standi
   that is detiled (0.24) and uploaded again (0.10-0.14). Nothing in the frame reads the two colour
   copies.
 - cs e2c27f0c (one workgroup) spans 1.3-1.8 ms with 0.07 ms of its own work: a dependency bubble.
+
+## Draws that can have no effect are skipped (M3 Pro, 2026-10-23)
+
+A draw with no pixel shader, no colour/depth/stencil target, no object motion, no tessellation or
+geometry stage and no stage that writes a buffer or an image (or uses DMA or GDS) is not recorded.
+Each still cost a render pass of its own: it ended the open pass, flushed its deferred copies and
+opened a 16x16 one. In the city they are 12 per frame, all vs 89cda9e4. `BB_SKIP_NOOP_DRAWS=0` (or
+toggle bit 56) turns it off.
+
+City, one session, switched every 30 s by the toggle file (2x30 s each): **60.85 -> 61.56 FPS
+(+1.2%), GPU busy 16.34 -> 16.08 ms/frame**, encoders with fence waits 286 -> 273 per frame, CPU the
+same (~453% for both processes, 74 ms/frame). Snapshots 0.7 s apart: 0.45 between the modes, 0.64
+within one mode (mean absolute difference per channel, 0-255): no visible change.
