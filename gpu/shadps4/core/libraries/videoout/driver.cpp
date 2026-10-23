@@ -806,7 +806,7 @@ void VideoOutDriver::Flip(const Request& req) {
                         frames ? double(BbStats::reduced_draws.exchange(0)) / frames : 0.0,
                         frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0, gpu_ms,
                         gpu_share, BbStutter::WallSeconds());
-            BbStutter::PrintWindow(window);
+            BbStutter::PrintWindow(window, frames);
             // Texture-cache collector input: Metal's allocation minus the resident guest
             // buffers (the arena) against the trigger.
             // And where this session's pipelines came from (binary archive or compiler).
