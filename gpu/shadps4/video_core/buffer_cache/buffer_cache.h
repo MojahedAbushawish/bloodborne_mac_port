@@ -199,6 +199,10 @@ private:
     /// order: readback_mutex, region lock, gpu_ranges_mutex.
     std::mutex readback_mutex;
     std::mutex gpu_ranges_mutex;
+    /// bbport: small guest copies of the current submission (SmallGuestCopy), on the threads that
+    /// own the scheduler.
+    u64 small_copy_tick = 0;
+    u64 small_copy_bytes = 0;
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;

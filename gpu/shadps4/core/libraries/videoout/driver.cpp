@@ -670,6 +670,13 @@ void VideoOutDriver::Flip(const Request& req) {
         last_rb = rb;
         last_rb_ns = rb_ns;
         last_rb_finish = rb_finish;
+        static u64 last_burst;
+        const u64 burst = BbStutter::burst_copy_bytes.load(std::memory_order_relaxed);
+        if (frame_ms > 40.0 && last_gpu_ns != 0 && burst > last_burst) {
+            std::printf("       %.1f MB of small copies sent to the copy threads (burst)\n",
+                        (burst - last_burst) / 1e6);
+        }
+        last_burst = burst;
         const u64 copy_ns = BbStats::t_copy.load(), copy_bytes = BbStats::copy_bytes.load();
         u64 proc_flt = 0;
 #ifndef _WIN32
