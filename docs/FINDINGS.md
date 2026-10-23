@@ -1752,3 +1752,20 @@ The fix (src/runtime_hooks.c, observer hooks: no lock):
 - Checked with `BB_FRAME_POOL_TEST=2`, which treats everything past 2 KiB as failed. Every
   frame went through the spare pool for about 8,700 frames: 60 FPS, the picture intact, and the
   spare pool never full. `BB_FRAME_POOL=0` turns the hooks off.
+
+## Where the city frame's GPU time goes, with copies labelled right (M3 Pro, 2026-10-23)
+
+`BB_GPU_PROFILE=1` booked the render pass after a deferred copy-shader flush under "copy shader HLE"
+(the copy marked its label and never gave the interrupted one back), and the tiling kernels of image
+downloads/uploads under whatever dispatch bound the image. Now a copy resumes the label it
+interrupted and the tiling kernels have labels of their own.
+
+Central Yharnam (the player's save, 1080p native, upscaler off, uncapped, standing; 1,404 draws/frame):
+- **The copy-shader segment stays at 5.3-5.5 ms/frame** (73 encoders/frame, ~0.9 ms of encoder time).
+  It is not mislabelling: it is time between the copies and the passes that follow them (waits).
+- **The per-frame whole-surface copies cost about 2.3 ms of segments:** two 1080p colour targets
+  (RGBA16F, RGBA8) are downloaded (0.22 + 0.11), tiled into guest memory (0.55 + 0.31) and copied by the
+  game's memcpy shader 3d5ebf4e (0.66); the depth is tiled (0.11-0.13) and copied into an R32F texture
+  that is detiled (0.24) and uploaded again (0.10-0.14). Nothing in the frame reads the two colour
+  copies.
+- cs e2c27f0c (one workgroup) spans 1.3-1.8 ms with 0.07 ms of its own work: a dependency bubble.
