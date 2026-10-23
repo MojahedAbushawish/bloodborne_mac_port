@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <unordered_set>
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "bbport_toggles.h"
@@ -167,6 +169,63 @@ Metal::Draw::ComputeView ComputeView(const ComputePipeline& pipeline) {
 /// known from the stages before the pipeline is built).
 bool IsTessellated(const GraphicsPipeline& pipeline) {
     return pipeline.GetStages()[u32(Shader::SwStage::TessellationControl)] != nullptr;
+}
+
+/// bbport: draws that can have no effect are not recorded (BB_SKIP_NOOP_DRAWS=0 or the toggle
+/// NoOpDrawSkip: they are). Each such draw (no pixel shader, no attachments: the city's 12 per
+/// frame of vs 89cda9e4) still cost a render pass of its own: it ended the open pass, flushed its
+/// deferred copies and opened a 16x16 one (NoOutputPassArea).
+bool SkipNoOpDraws() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_SKIP_NOOP_DRAWS");
+        return !env || env[0] != '0';
+    }();
+    return on && !BbToggle::Disabled(BbToggle::NoOpDrawSkip);
+}
+
+/// No fragments and no memory writes: no pixel shader, no colour, depth or stencil target, no
+/// object motion attachment, no tessellation or geometry stage, and no stage that writes a buffer
+/// or an image, or reaches memory by address (DMA) or through GDS.
+bool IsNoOpDraw(const GraphicsPipeline& pipeline, const AmdGpu::Regs& regs) {
+    const auto& key = pipeline.GetGraphicsKey();
+    const auto stages = pipeline.GetStages();
+    if (key.mrt_mask != 0 || key.motion_vectors || stages[u32(Shader::SwStage::Fragment)] ||
+        BoundDepthAttachment(regs).Bound() || IsTessellated(pipeline) ||
+        stages[u32(Shader::SwStage::Geometry)]) {
+        return false;
+    }
+    for (const auto* stage : stages) {
+        if (!stage) {
+            continue;
+        }
+        if (stage->uses_dma || stage->has_storage_images) {
+            return false;
+        }
+        for (const auto& buffer : stage->buffers) {
+            if (buffer.is_written || buffer.buffer_type == Shader::BufferType::GdsBuffer ||
+                buffer.buffer_type == Shader::BufferType::BdaPagetable ||
+                buffer.buffer_type == Shader::BufferType::FaultBuffer) {
+                return false;
+            }
+        }
+        for (const auto& image : stage->images) {
+            if (image.is_written || image.is_atomic) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// Logs the first skipped draw of each vertex shader.
+void NoteNoOpDraw(const GraphicsPipeline& pipeline) {
+    static std::mutex mutex;
+    static std::unordered_set<u64> logged;
+    const u64 hash = pipeline.GetStage(Shader::SwStage::Vertex).pgm_hash;
+    std::scoped_lock lock{mutex};
+    if (logged.insert(hash).second) {
+        std::printf("No-op draws skipped: vs %016llx\n", static_cast<unsigned long long>(hash));
+    }
 }
 } // namespace
 
@@ -1058,6 +1117,11 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         scene_debug_frame = scene_debug && std::remove(scene_debug) == 0;
         scene_targets->debug = scene_debug_frame;
     }
+    if (SkipNoOpDraws() && IsNoOpDraw(*pipeline, regs)) {
+        NoteNoOpDraw(*pipeline);
+        BbStats::noop_draws.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     bind_prepared = used_prepared;
     motion_draw = pipeline->GetGraphicsKey().motion_vectors;
     motion_geometry = 0;
@@ -1276,6 +1340,11 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
+    }
+    if (SkipNoOpDraws() && IsNoOpDraw(*pipeline, Regs())) {
+        NoteNoOpDraw(*pipeline);
+        BbStats::noop_draws.fetch_add(1, std::memory_order_relaxed);
+        return;
     }
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;
