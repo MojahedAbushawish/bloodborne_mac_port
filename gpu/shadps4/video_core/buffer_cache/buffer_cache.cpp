@@ -13,6 +13,7 @@
 #include <sys/sysctl.h>
 #endif
 #include "bbport_copy.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/alignment.h"
 #include "core/memory.h"
@@ -127,6 +128,9 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
         address_space[first_page + page] = arena;
     }
     runtime.RegisterHoistTarget(arena, arena_bytes);
+    if (BbStats::enabled) {
+        BbStutter::page_ticks.Init(MacArenaBase, arena_bytes);
+    }
     // Shaders reach the arena by address (page table): resident, and declared on every encoder
     // (the declaration survives Submit).
     device.MakeResident(arena->Handle());
@@ -176,7 +180,22 @@ void BufferCache::ExtendWriteFault(VAddr device_addr) {
 }
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks) {
-    const auto flush_request = [this, device_addr, size, is_write] {
+    // bbport: BB_FRAME_STATS times each read-back and records the writer of the faulting page
+    // (bbport_stutter.h).
+    BbStutter::Readback record;
+    BbStutter::Readback* const stats = BbStats::enabled ? &record : nullptr;
+    if (stats) {
+        record.start_ns = BbStutter::NowNs();
+        record.page_tick = BbStutter::page_ticks.Max(device_addr, std::max<u64>(size, 1));
+        record.caller = assume_locks ? BbStutter::Inline
+                        : BbStutter::CurrentClass() == BbStutter::Fault ? BbStutter::FromFault
+                                                                        : BbStutter::FromOther;
+    }
+    const auto flush_request = [this, device_addr, size, is_write, stats] {
+        if (stats) {
+            stats->pickup_ns = BbStutter::NowNs() - stats->start_ns;
+            BbStutter::tls_readback = stats;
+        }
         const u32 first_block = device_addr >> block_shift;
         const u32 last_block = (device_addr + size - 1) >> block_shift;
         const auto* arena = GetArena(first_block, last_block);
@@ -193,11 +212,16 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
+        BbStutter::tls_readback = nullptr;
     };
     if (assume_locks) {
         flush_request();
     } else {
         liverpool->SendCommand<true>(std::move(flush_request));
+    }
+    if (stats) {
+        record.total_ns = BbStutter::NowNs() - record.start_ns;
+        BbStutter::NoteReadback(record);
     }
 }
 
@@ -230,6 +254,10 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         };
         gpu_modified_ranges.ForEachInRange(address, size, add_download);
         gpu_modified_ranges.Subtract(address, size);
+        if (auto* stats = BbStutter::tls_readback) {
+            stats->window_tick =
+                std::max(stats->window_tick, BbStutter::page_ticks.Max(address, size));
+        }
     });
     if (total_size_bytes == 0) {
         return;
@@ -241,7 +269,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     }
     runtime.CopyBuffer(*arena, *download.buffer, copies);
     // Shared storage is coherent: the data is readable once the copy completed.
+    const u64 finish_start = BbStutter::tls_readback ? BbStutter::NowNs() : 0;
     scheduler.Finish();
+    if (auto* stats = BbStutter::tls_readback) {
+        stats->finish_ns += BbStutter::NowNs() - finish_start;
+        stats->bytes += total_size_bytes;
+    }
 
     for (const auto& d : downloads) {
         memory->TryWriteBacking(std::bit_cast<u8*>(d.address), download.mapped + d.staging_offset,
@@ -533,6 +566,10 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     boost::container::small_vector<BufferCopy, 4> copies;
     size_t total_size_bytes{};
     const Buffer* src_buffer{};
+    if (is_written && BbStats::enabled) {
+        // bbport: the command buffer being recorded writes this range (bbport_stutter.h).
+        BbStutter::page_ticks.Stamp(device_addr, size, scheduler.CurrentTick());
+    }
     memory_tracker->ForEachUploadRange(
         device_addr, size, is_written,
         [&](u64 addr, u64 size) {
