@@ -807,6 +807,25 @@ void VideoOutDriver::Flip(const Request& req) {
                         frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0, gpu_ms,
                         gpu_share, BbStutter::WallSeconds());
             BbStutter::PrintWindow(window, frames);
+            // bbport: the game's total wait on relayed faults against the fault thread's handling
+            // time: the difference is queueing behind the single fault thread and transit.
+            if (BbGpuShared* shared = BbSplit::Host() ? BbSplit::Shared() : nullptr) {
+                static u64 last_faults = 0, last_fault_ns = 0;
+                const u64 faults = __atomic_load_n(&shared->game_faults, __ATOMIC_RELAXED);
+                const u64 fault_ns = __atomic_load_n(&shared->game_fault_ns, __ATOMIC_RELAXED);
+                if (last_fault_ns) {
+                    std::printf("Game fault waits (%.1f s): %llu relayed faults, %.1f ms waited "
+                                "(%.1f us each) | t=%.3f\n",
+                                window, static_cast<unsigned long long>(faults - last_faults),
+                                (fault_ns - last_fault_ns) / 1e6,
+                                faults > last_faults
+                                    ? (fault_ns - last_fault_ns) / 1e3 / double(faults - last_faults)
+                                    : 0.0,
+                                BbStutter::WallSeconds());
+                }
+                last_faults = faults;
+                last_fault_ns = fault_ns;
+            }
             // Texture-cache collector input: Metal's allocation minus the resident guest
             // buffers (the arena) against the trigger.
             // And where this session's pipelines came from (binary archive or compiler).

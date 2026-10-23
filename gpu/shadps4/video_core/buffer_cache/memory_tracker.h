@@ -135,6 +135,29 @@ public:
                             });
     }
 
+    /// bbport: InvalidateRegion for a guest write fault inside one region, with its fault window
+    /// in the same protection update (RegionManager::InvalidateWithWindow). False: the region
+    /// holds GPU data there (on_flush ran; the caller extends the window separately) or is not
+    /// tracked.
+    bool InvalidateWriteFault(VAddr cpu_addr, u64 size, VAddr window_addr, u64 window_size,
+                              auto&& on_flush) noexcept {
+        auto* manager = top_tier[cpu_addr >> TRACKER_HIGHER_PAGE_BITS];
+        if (!manager) {
+            return false;
+        }
+        {
+            std::scoped_lock lk{manager->lock};
+            const u64 offset = cpu_addr - manager->GetCpuAddr();
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Disabled ||
+                !manager->template IsRegionModified<Type::GPU>(offset, size)) {
+                manager->InvalidateWithWindow(cpu_addr, size, window_addr, window_size);
+                return true;
+            }
+        }
+        on_flush();
+        return false;
+    }
+
     /// bbport: runs `func(RegionManager&)` under the lock of the region holding `cpu_addr`
     /// (direct read-backs). False without calling it when the region was never tracked.
     template <typename Func>
