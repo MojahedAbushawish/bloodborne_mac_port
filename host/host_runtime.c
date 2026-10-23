@@ -215,6 +215,16 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     store_once((unsigned char *)address, data, size);
     return 1;
 }
+/* The same with the view table locked across the store, for threads that run concurrently with
+ * the ring thread's map/unmap events (the fault thread's direct read-backs): the view cannot be
+ * removed between the check and the store. */
+int runtime_memory_write_backing_locked(uintptr_t address, const void *data, uint64_t size) {
+    pthread_rwlock_rdlock(&table_lock);
+    const int covered = covered_locked(address, address + size);
+    if (covered) store_once((unsigned char *)address, data, size);
+    pthread_rwlock_unlock(&table_lock);
+    return covered;
+}
 /* Game threads live in bb-probe: the spike log's CPU times come through the control block. */
 uint64_t runtime_thread_cpu_ns(int which) {
     (void)which;
