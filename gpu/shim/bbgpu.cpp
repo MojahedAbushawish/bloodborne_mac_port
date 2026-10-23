@@ -284,6 +284,29 @@ extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
         s->label_address = Libraries::VideoOut::BbSplitLabelAddress();
         s->hdr_supported = presenter && presenter->IsHDRSupported() ? 1 : 0;
         BbSplit::ForwardInterrupts();
+        // bbport: the second number of BB_TOGGLE_FILE (bbport_stutter.h toggles2), re-read every
+        // 250 ms like the first, which host_runtime.c reads.
+        if (const char* toggles = std::getenv("BB_TOGGLE_FILE")) {
+            std::thread([path = std::string{toggles}] {
+                Common::SetCurrentThreadName("bb:Toggles2");
+                for (u64 last = ~0ULL;;) {
+                    unsigned long long first = 0, second = 0;
+                    if (FILE* f = std::fopen(path.c_str(), "r")) {
+                        if (std::fscanf(f, "%llu %llu", &first, &second) != 2) {
+                            second = 0;
+                        }
+                        std::fclose(f);
+                    }
+                    if (second != last) {
+                        BbStutter::toggles2.store(second, std::memory_order_relaxed);
+                        std::printf("Second toggle word: %llu | t=%.3f\n", second,
+                                    BbStutter::WallSeconds());
+                        last = second;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                }
+            }).detach();
+        }
         // Keyboard for the game's pad emulation (input proper moves here in M5).
         std::thread([s] {
             Common::SetCurrentThreadName("bb:KeyBridge");

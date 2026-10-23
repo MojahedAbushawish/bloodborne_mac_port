@@ -2043,6 +2043,7 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
 }
 
 void Rasterizer::ResetBindings() {
+    scheduler.NoteCommandRecorded(); // the draw or dispatch is recorded (direct read-backs)
     for (auto& image_id : bound_images) {
         texture_cache.GetImage(image_id).binding = {};
     }
