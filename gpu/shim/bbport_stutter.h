@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -240,6 +241,94 @@ private:
 };
 inline PageTicks page_ticks;
 
+// ---- Direct read-backs (stutter plan phase 1) ----
+//
+// A guest write fault on a page holding GPU-written data copies that data back first. Before, the
+// GPU command thread did it: it drained the draw pipe, copied on the GPU and waited for the whole
+// queue (scheduler.Finish()), so the frame stopped. Now the fault thread copies straight from the
+// lazy arena's CPU view when the command buffer that last wrote the page has completed (93% of
+// read-backs while moving, play-lazy-2123): BufferCache::TryDirectReadBack.
+
+/// The second number of BB_TOGGLE_FILE (all 64 bits of the first are taken): bit 0 = direct
+/// read-backs off, bit 1 = verify mode instead (an in-session A/B that also checks the stamps).
+/// Read by a watcher thread in the GPU process (bbgpu_host_start).
+inline std::atomic<u64> toggles2{0};
+
+enum DirectMode : int { DirectOff, DirectOn, DirectVerify };
+/// BB_DIRECT_READBACK=0 (off), 1 (default) or verify (decide and snapshot, but take the old path,
+/// then compare the bytes it wrote with the snapshot; for testing the writer stamps).
+inline int DirectReadbackMode() {
+    static const int mode = [] {
+        const char* env = std::getenv("BB_DIRECT_READBACK");
+        if (env && std::string_view{env} == "verify") {
+            return int(DirectVerify);
+        }
+        return env && env[0] == '0' ? int(DirectOff) : int(DirectOn);
+    }();
+    if (mode == DirectOn) {
+        const u64 bits = toggles2.load(std::memory_order_relaxed);
+        if (bits & 1) {
+            return DirectOff;
+        }
+        if (bits & 2) {
+            return DirectVerify;
+        }
+    }
+    return mode;
+}
+
+/// Ticks committed while a GPU write was bound but its command not yet recorded (a flush in the
+/// middle of a draw's bindings): pages stamped with such a tick may be written by a later command
+/// buffer. Rare; a small ring.
+struct SplitTicks {
+    std::mutex mutex;
+    std::array<u64, 256> ring{};
+    u32 next = 0;
+    std::atomic<u64> count{0};
+};
+inline SplitTicks split_ticks;
+
+inline void MarkSplit(u64 tick) {
+    std::scoped_lock lock{split_ticks.mutex};
+    split_ticks.ring[split_ticks.next++ % split_ticks.ring.size()] = tick;
+    split_ticks.count.fetch_add(1, std::memory_order_relaxed);
+}
+
+/// The command buffer that holds the writes stamped `stamp` (later if `stamp` was split).
+inline u64 EffectiveTick(u64 stamp) {
+    if (split_ticks.count.load(std::memory_order_relaxed) == 0) {
+        return stamp;
+    }
+    std::scoped_lock lock{split_ticks.mutex};
+    for (bool again = true; again;) {
+        again = false;
+        for (const u64 tick : split_ticks.ring) {
+            if (tick != 0 && tick == stamp) {
+                ++stamp;
+                again = true;
+                break;
+            }
+        }
+    }
+    return stamp;
+}
+
+enum Fallback : u32 {
+    FbOff, FbShape, FbNoView, FbNoRegion, FbUnstamped, FbNotComplete, FbVerify, NumFallbacks
+};
+inline const char* FallbackName(u32 f) {
+    static constexpr const char* names[NumFallbacks] = {
+        "off", "not one region", "no CPU view", "no region", "unstamped", "writer not complete",
+        "verify"};
+    return f < NumFallbacks ? names[f] : "?";
+}
+struct DirectStats {
+    std::atomic<u64> count{0}, ns{0}, pages{0}, bytes{0}, other_pages_left{0};
+    std::array<std::atomic<u64>, NumFallbacks> fallbacks{};
+    std::atomic<u64> verified{0}, verify_mismatches{0}, verify_skipped{0};
+};
+inline DirectStats direct;
+
 // ---- Read-backs ----
 
 enum Caller : u32 { FromFault, FromOther, Inline, NumCallers };
@@ -254,6 +343,7 @@ struct Readback {
     u64 window_tick = 0; ///< latest writer of the downloaded ranges
     u32 caller = FromOther;
     u32 windows_waited = 0; ///< summaries that found the writer not completed yet
+    bool direct = false;    ///< copied by the fault thread from the arena's CPU view
 };
 
 /// The read-back the current thread is running (DownloadMemory fills bytes, finish, window).
@@ -318,6 +408,36 @@ inline void PrintWindow(double window_s) {
         readbacks.pending.swap(keep);
     }
     const double t = WallSeconds();
+    // Direct read-backs (phase 1) and why the others took the old path.
+    if (const u64 n_direct = direct.count.exchange(0, std::memory_order_relaxed);
+        n_direct || direct.fallbacks[FbNotComplete].load(std::memory_order_relaxed) ||
+        direct.verified.load(std::memory_order_relaxed)) {
+        std::string reasons;
+        for (u32 f = 0; f < NumFallbacks; ++f) {
+            if (const u64 c = direct.fallbacks[f].exchange(0, std::memory_order_relaxed)) {
+                char part[64];
+                std::snprintf(part, sizeof(part), "%s%s %llu", reasons.empty() ? "" : ", ",
+                              FallbackName(f), static_cast<unsigned long long>(c));
+                reasons += part;
+            }
+        }
+        std::printf("Direct read-backs (%.1f s): %llu, %.2f ms, %llu pages, %.1f MB, %llu window pages "
+                    "left GPU-modified; old path: %s; verify: %llu checked, %llu mismatches, %llu "
+                    "skipped | t=%.3f\n",
+                    window_s, static_cast<unsigned long long>(n_direct),
+                    direct.ns.exchange(0, std::memory_order_relaxed) / 1e6,
+                    static_cast<unsigned long long>(direct.pages.exchange(0, std::memory_order_relaxed)),
+                    direct.bytes.exchange(0, std::memory_order_relaxed) / 1e6,
+                    static_cast<unsigned long long>(
+                        direct.other_pages_left.exchange(0, std::memory_order_relaxed)),
+                    reasons.empty() ? "none" : reasons.c_str(),
+                    static_cast<unsigned long long>(direct.verified.exchange(0, std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(
+                        direct.verify_mismatches.exchange(0, std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(
+                        direct.verify_skipped.exchange(0, std::memory_order_relaxed)),
+                    t);
+    }
     if (!done.empty()) {
         u64 by_caller[NumCallers]{};
         u64 total = 0, max_total = 0, pickup = 0, finish = 0, bytes = 0;

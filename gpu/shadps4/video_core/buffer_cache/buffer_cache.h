@@ -9,6 +9,8 @@
 #include "bbport_copy.h"
 
 #include <deque>
+#include <mutex>
+#include <vector>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -140,6 +142,20 @@ private:
 
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
+    /// bbport: a guest write fault's read-back done by the calling (fault) thread, straight from
+    /// the lazy arena's CPU view, when the command buffers that wrote the faulting page have
+    /// completed (bbport_stutter.h, stutter plan phase 1). False: nothing changed, take the old
+    /// path. `verify`: decide and snapshot the bytes, change nothing, return false.
+    struct VerifyEntry {
+        VAddr address;
+        u64 stamp;
+        std::vector<u8> bytes;
+    };
+    bool TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
+                           std::vector<VerifyEntry>* verify);
+    /// After the old path ran in verify mode: compares guest memory with the snapshot.
+    void CheckDirectReadBack(const std::vector<VerifyEntry>& snapshot);
+
     bool SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
                            bool is_texel_buffer);
 
@@ -171,6 +187,12 @@ private:
     StreamBuffer stream_buffer;
     Buffer gds_buffer;
     RangeSet gpu_modified_ranges;
+    /// bbport: every read-back (DownloadMemory, TryDirectReadBack) holds readback_mutex, so the
+    /// fault thread's direct path never runs in the middle of the GPU command thread's download.
+    /// gpu_ranges_mutex guards gpu_modified_ranges, which the recording thread adds to. Lock
+    /// order: readback_mutex, region lock, gpu_ranges_mutex.
+    std::mutex readback_mutex;
+    std::mutex gpu_ranges_mutex;
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
