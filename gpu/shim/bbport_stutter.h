@@ -254,6 +254,16 @@ inline PageTicks page_ticks;
 /// Read by a watcher thread in the GPU process (bbgpu_host_start).
 inline std::atomic<u64> toggles2{0};
 
+/// Phase 3 switches (second toggle word, for the A/B; both on by default): bit 2 = per-KiB hoist
+/// tags only (Runtime::NoteSubmissionUse), bit 3 = full page walks for reads
+/// (Metal::BufferBarriers::Conflicts).
+inline bool CoarseHoistTagsOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 4) != 0;
+}
+inline bool BarrierWriteIndexOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 8) != 0;
+}
+
 enum DirectMode : int { DirectOff, DirectOn, DirectVerify };
 /// BB_DIRECT_READBACK=0 (off), 1 (default) or verify (decide and snapshot, but take the old path,
 /// then compare the bytes it wrote with the snapshot; for testing the writer stamps).
@@ -389,7 +399,16 @@ inline bool PredictedWait(u64 tick, u64 start_ns, u64& wait_ns, int& kind) {
 }
 
 /// Every 5 s (driver.cpp): read-backs, protect relays and the fault thread, then reset.
-inline void PrintWindow(double window_s) {
+inline void PrintWindow(double window_s, u64 frames) {
+    // The recording thread's CPU time per frame (phase 3 A/B).
+    static u64 last_stage_b_us = 0;
+    const u64 stage_b_us = StageBCpuUs();
+    if (last_stage_b_us && frames) {
+        std::printf("Recording thread: %.2f ms CPU per frame (%llu frames) | t=%.3f\n",
+                    (stage_b_us - last_stage_b_us) / 1e3 / double(frames),
+                    static_cast<unsigned long long>(frames), WallSeconds());
+    }
+    last_stage_b_us = stage_b_us;
     std::vector<Readback> done;
     {
         std::scoped_lock lock{readbacks.mutex};
