@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <pthread.h>
+#include <pthread/qos.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
 #endif
@@ -262,6 +263,27 @@ inline bool CoarseHoistTagsOff() {
 }
 inline bool BarrierWriteIndexOff() {
     return (toggles2.load(std::memory_order_relaxed) & 8) != 0;
+}
+
+/// Phase 2 switches (second toggle word): bit 4 = no user-interactive QoS for the threads on the
+/// fault and protect path, bit 5 = a fault's two protect relays kept separate (both on by
+/// default); bit 6 = spin before the protect relay's wait sleeps (opt-in, host_runtime.c).
+inline bool QosOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 16) != 0;
+}
+inline bool MergedFaultRelayOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 32) != 0;
+}
+
+/// Gives the calling thread user-interactive QoS (P cores, prompt wake-ups) or the default;
+/// cheap when nothing changes. For the threads on the fault/protect relay path.
+inline void ApplyQos() {
+    static thread_local int applied = -1;
+    const int want = QosOff() ? 0 : 1;
+    if (want != applied) {
+        pthread_set_qos_class_self_np(want ? QOS_CLASS_USER_INTERACTIVE : QOS_CLASS_DEFAULT, 0);
+        applied = want;
+    }
 }
 
 enum DirectMode : int { DirectOff, DirectOn, DirectVerify };

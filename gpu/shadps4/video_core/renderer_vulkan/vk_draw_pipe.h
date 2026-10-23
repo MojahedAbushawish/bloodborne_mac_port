@@ -213,6 +213,7 @@ private:
 #endif
         u64 at = 0;
         while (true) {
+            BbStutter::ApplyQos(); // user-interactive unless switched off (stutter plan phase 2)
             // Packets follow each other within microseconds while a frame is decoded: spin,
             // and sleep only after a longer pause (between frames).
             u64 available = published.load(std::memory_order_acquire);

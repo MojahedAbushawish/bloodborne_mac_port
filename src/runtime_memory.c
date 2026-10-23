@@ -19,6 +19,8 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <pthread.h>
+#include <pthread/qos.h>
 #include "gpu_process.h"
 #endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. BB_DMEM_MB raises it (the resolution
@@ -1030,7 +1032,38 @@ static void protect_stats_print(uint64_t now) {
     memset(&protect_stats,0,sizeof protect_stats);
     protect_stats.window_start=now;
 }
+/* Stutter plan phase 2: the GPU protect relay's consumer (bb:GpuProtect) runs at user-interactive
+ * QoS unless bit 16 of BB_TOGGLE_FILE's second number is set. The game's own toggle watcher runs
+ * only in single-process mode, so this one starts with the first relay. */
+static uint64_t toggles2_game;
+static void *toggles2_watcher(void *path) {
+    for (;;) {
+        FILE *f=fopen(path,"r");
+        unsigned long long first=0, second=0;
+        if (f) { if (fscanf(f,"%llu %llu",&first,&second)!=2) second=0; fclose(f); }
+        __atomic_store_n(&toggles2_game,(uint64_t)second,__ATOMIC_RELAXED);
+        struct timespec t={0,250000000}; nanosleep(&t,NULL);
+    }
+    return NULL;
+}
+static void protect_thread_qos(void) {
+    static int watcher_started;
+    static __thread int applied=-1;
+    if (!__atomic_exchange_n(&watcher_started,1,__ATOMIC_ACQ_REL)) {
+        const char *toggles=getenv("BB_TOGGLE_FILE");
+        pthread_t watcher;
+        if (toggles && pthread_create(&watcher,NULL,toggles2_watcher,(void *)toggles)==0) pthread_detach(watcher);
+    }
+    const int want=(__atomic_load_n(&toggles2_game,__ATOMIC_RELAXED) & 16) ? 0 : 1;
+    if (want!=applied) {
+#ifdef __APPLE__
+        pthread_set_qos_class_self_np(want ? QOS_CLASS_USER_INTERACTIVE : QOS_CLASS_DEFAULT,0);
+#endif
+        applied=want;
+    }
+}
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write) {
+    protect_thread_qos();
     const int stats=lock_stats_on();
     const uint64_t start=stats ? now_ns() : 0;
     read_lock();

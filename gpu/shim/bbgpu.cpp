@@ -326,6 +326,17 @@ extern "C" void bbgpu_split_post_restart(void) {
     BbSplit::Post(&record);
 }
 
+/// bbport: the second toggle word (bbport_stutter.h) for bbgpu-host's own threads (main.c,
+/// host_runtime.c).
+extern "C" uint64_t bbgpu_toggle_word2(void) {
+    return BbStutter::toggles2.load(std::memory_order_relaxed);
+}
+
+/// bbport: the fault thread's QoS (stutter plan phase 2), applied as the switch changes.
+extern "C" void bbgpu_apply_qos(void) {
+    BbStutter::ApplyQos();
+}
+
 extern "C" int bbgpu_host_fault(uint64_t address, int write) {
     auto* rasterizer = Core::Memory::Instance()->GetRasterizer();
     if (!rasterizer) {

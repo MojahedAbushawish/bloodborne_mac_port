@@ -142,6 +142,14 @@ private:
 
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
+public:
+    /// bbport: a guest write fault: InvalidateMemory and ExtendWriteFault with one protect relay
+    /// when the faulting range holds no GPU data (stutter plan phase 2; second toggle word bit 5
+    /// off). Returns false when the caller must still call ExtendWriteFault.
+    bool InvalidateWriteFault(VAddr device_addr, u64 size);
+
+private:
+
     /// bbport: a guest write fault's read-back done by the calling (fault) thread, straight from
     /// the lazy arena's CPU view, when the command buffers that wrote the faulting page have
     /// completed (bbport_stutter.h, stutter plan phase 1). False: nothing changed, take the old
