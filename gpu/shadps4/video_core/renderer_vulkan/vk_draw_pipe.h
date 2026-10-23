@@ -14,6 +14,7 @@
 
 #include <cstdlib>
 #include <cstdio>
+#include "bbport_stutter.h"
 #include "bbport_threads.h"
 
 #include <array>
@@ -201,6 +202,10 @@ private:
     void Run(std::stop_token stop) {
         Common::SetCurrentThreadName("bb:DrawRec");
         on_stage_b = true;
+#ifdef __APPLE__
+        BbStutter::stage_b_port.store(pthread_mach_thread_np(pthread_self()),
+                                      std::memory_order_release);
+#endif
 #ifdef _WIN32
         stage_b_tid.store(static_cast<u32>(GetCurrentThreadId()), std::memory_order_release);
 #else
