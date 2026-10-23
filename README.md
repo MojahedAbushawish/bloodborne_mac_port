@@ -35,6 +35,9 @@ highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion 
   renderer, so the upscalers blended in history from the mirrored position.
 - **Native AA works again with texture compression on**: since 0.5.4 it, and upscaling above
   1080p, silently ran without the upscaler.
+- **The launcher no longer freezes on macOS 26.0.1** when switching from Advanced back to General
+  (#47): General and Advanced are now a switch at the top instead of tabs, which hit a SwiftUI
+  bug in that macOS version.
 
 ### New in 0.5.4.2: GPU stall crashes fixed
 
