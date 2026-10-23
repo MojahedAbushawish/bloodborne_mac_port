@@ -286,6 +286,12 @@ inline void ApplyQos() {
     }
 }
 
+/// Phase 4 switch (second toggle word): bit 7 = small guest copies stay on bb:MtlRecorder during
+/// bursts too (BufferCache::SmallGuestCopy).
+inline bool CopyBurstsOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 128) != 0;
+}
+
 enum DirectMode : int { DirectOff, DirectOn, DirectVerify };
 /// BB_DIRECT_READBACK=0 (off), 1 (default) or verify (decide and snapshot, but take the old path,
 /// then compare the bytes it wrote with the snapshot; for testing the writer stamps).
@@ -386,6 +392,9 @@ struct ReadbackLog {
     std::vector<Readback> pending;
 };
 inline ReadbackLog readbacks;
+
+/// Bytes of small guest copies sent to the copy threads because of a burst (phase 4).
+inline std::atomic<u64> burst_copy_bytes{0};
 
 // Per-frame totals for the Stall block.
 inline std::atomic<u64> readback_count{0}, readback_ns{0}, readback_finish_ns{0};

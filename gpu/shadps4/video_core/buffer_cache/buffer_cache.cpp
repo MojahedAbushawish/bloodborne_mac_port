@@ -158,10 +158,25 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
+// bbport: an area entry brings ~900 new textures and ~250 MB of buffer data in one frame, mostly
+// as copies under 1 MB: bb:MtlRecorder copied them alone at ~0.5 GB/s (first-touch faults) while
+// the copy threads idled, and the recording thread waited 150 ms (stutter plan phase 4). Once a
+// submission's small copies pass 8 MB, the rest go to the copy threads. Both routes complete
+// before the submission (WaitHostCopies) and before deferred signals (BbCopy::AfterCopies).
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
     if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
-        scheduler.RecordHostCopy([item] { item.run(item); });
-        return;
+        constexpr u64 BurstBytes = 8_MB;
+        const u64 tick = scheduler.CurrentTick();
+        if (tick != small_copy_tick) {
+            small_copy_tick = tick;
+            small_copy_bytes = 0;
+        }
+        small_copy_bytes += item.size;
+        if (small_copy_bytes <= BurstBytes || BbStutter::CopyBurstsOff()) {
+            scheduler.RecordHostCopy([item] { item.run(item); });
+            return;
+        }
+        BbStutter::burst_copy_bytes.fetch_add(item.size, std::memory_order_relaxed);
     }
     BbCopy::QueueCopy(item);
 }
