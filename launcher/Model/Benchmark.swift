@@ -75,7 +75,8 @@ enum Benchmark {
         let saves = work.appendingPathComponent("savedata")
         var plan = layout.launchPlan(gameDir: gameDir, saveDir: saves, dataDir: dataDir, env: env)
         var e = plan.environment
-        for key in ["BB_BENCH_SECONDS", "BB_PAD_REPLAY", "BB_FPS_LIMIT", "BB_VBLANK_HZ", "BB_PRESENT_MODE", "BB_FPS_AUTO"] {
+        for key in ["BB_BENCH_SECONDS", "BB_PAD_REPLAY", "BB_FPS_LIMIT", "BB_VBLANK_HZ", "BB_PRESENT_MODE", "BB_FPS_AUTO",
+                    "BB_PATCHES", "BB_PATCHES_CONFIG", "BB_MODS_DIR", "BB_MODS_CONFIG"] {
             e.removeValue(forKey: key)
         }
         e["BB_BENCHMARK"] = pass.rawValue
@@ -83,6 +84,9 @@ enum Benchmark {
         e["BB_SAVE_DIR"] = saves.path
         e["BB_CONFIG"] = work.appendingPathComponent("benchmark.ini").path
         e["BB_FRAME_STATS"] = "1"
+        // Always the plain game: no mods, no patch files (cheats are off: benchmark.ini has none).
+        e["BB_MODS_ENABLED"] = "0"
+        e["BB_PATCHES_DIR"] = work.appendingPathComponent("no-patches").path
         switch pass {
         case .traversal:
             e["BB_PAD_REPLAY"] = assets.appendingPathComponent("route.pad").path

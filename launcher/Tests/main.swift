@@ -416,6 +416,7 @@ do {
     let t = Benchmark.launchPlan(.traversal, layout: packaged, gameDir: game, dataDir: data, env: env, assets: assets, work: work, out: out).environment
     check(t["BB_BENCHMARK"] == "traversal" && t["BB_BENCH_OUT"] == out.appendingPathComponent("traversal.csv").path, "traversal mode and CSV")
     check(t["BB_PAD_REPLAY"] == assets.appendingPathComponent("route.pad").path && t["BB_FPS"] == "60" && t["BB_FRAME_STATS"] == "1", "traversal replay")
+    check(t["BB_MODS_ENABLED"] == "0" && t["BB_PATCHES_DIR"] == work.appendingPathComponent("no-patches").path, "no mods or patch files")
     check(t["BB_SAVE_DIR"] == work.appendingPathComponent("savedata").path && t["BB_CONFIG"] == work.appendingPathComponent("benchmark.ini").path, "benchmark save and settings, not the player's")
     check(t["BB_FPS_LIMIT"] == nil && t["BB_PRESENT_MODE"] == nil && t["BB_VBLANK_HZ"] == nil && t["BB_BENCH_SECONDS"] == nil, "inherited pacing variables removed")
     check(t["BB_GAME_DIR"] == game.path && t["BB_DATA_DIR"] == data.path && t["BB_PREBUILT"] == "1", "the normal launch underneath (warm shader cache)")
