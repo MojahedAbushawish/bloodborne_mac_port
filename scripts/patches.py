@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """Compile selected shadPS4/GoldHEN XML patches into out/patches.bin for the loader.
 
 Patch addresses are PS4 virtual addresses (eboot base 0x400000); the loader's

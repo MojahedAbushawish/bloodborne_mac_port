@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the draw helper's part that needs the PSO cache's pipeline types (mtl_draw.h): views of
 // RenderPipeline / ComputePipeline, the routing of a GraphicsPipeline's draws, and the

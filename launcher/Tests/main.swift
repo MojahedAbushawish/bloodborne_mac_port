@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Model tests for the launcher (scripts/macos/build_launcher.sh --test). One PASS line or exit 1.
 import Foundation

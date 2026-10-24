@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 #define IMGUI_DEFINE_MATH_OPERATORS // ImVec2 arithmetic for the custom-drawn controls
 #include "bbport_overlay.h"

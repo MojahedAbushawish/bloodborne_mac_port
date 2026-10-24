@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Sourced by run.sh: bbport.ini settings the launcher writes that become environment variables.
 #   fps_cap=30|40|60|90|120  the presenter lets at most that many frames through

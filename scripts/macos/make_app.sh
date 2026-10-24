@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Builds Bloodborne.app in the repository folder: double-click (or keep in the Dock) to play
 # without a Terminal window. The app is the launcher window (launcher/) for this checkout: it
 # shares launch.conf with Bloodborne.command, runs run.sh (which rebuilds what changed) and writes

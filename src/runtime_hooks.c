@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Guest function hooks: one lock around the two engine paths that write the immediate graphics
  * context (load race, MACOS_BACKLOG "Load crash: root cause").
  *

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Builds dist/Bloodborne.app and dist/Bloodborne-macOS-<version>.zip: a self-contained app for
 # release downloads (unlike scripts/macos/make_app.sh, which makes a launcher for this checkout).
 # Contains the built port (x86-64 game process, arm64 GPU host), universal copies of the
