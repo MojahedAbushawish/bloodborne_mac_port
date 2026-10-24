@@ -1769,3 +1769,27 @@ unpatched game at 30, 60 FPS++ at 60, 90 FPS++ (+ sprint fix) at 90; 40 and 120 
 fixed-step patch and stay on Uncap FPS++. Fixed steps run the game slightly slower when a scene
 can't hold the cap. An explicit BB_FPS still wins; a value picked by the launcher is re-picked
 after an in-game restart (BB_FPS_AUTO).
+
+## Red flash on the hunter's breath: GCN legacy and clamped float ops (Cainhurst, 2026-10-24)
+
+On the Cainhurst rooftops the breath vapour (about every 4 s) flashed as a bright red ball, with
+the whole frame's exposure shifting on the same frames: one non-finite or huge red value spread by
+bloom and seen by auto exposure. Screen recordings (60 FPS, red pixels counted per frame):
+
+| Build | Frames with the flash |
+|---|---|
+| 0.5.4.5 | 70 of 4,225 (1 in 60), scattered frames through each breath |
+| `BB_MSL_SAFE_MATH=1` | 9 of 2,179 (1 in 240), one 3-frame flash at the start of each breath |
+| legacy/clamped ops translated | 6 of 3,229 (1 in 540), only at some camera angles |
+
+Safe math turning the scatter into one flash at the particle's birth pointed at a value that is
+infinite on IEEE hardware but defined on GCN. The translator mapped `v_mac_legacy_f32` and
+`v_mad_legacy_f32` to plain multiply-add (GCN: 0 * anything = 0, so 0 * Inf gave NaN here) and
+`v_rcp_clamp_f32`, `v_rsq_clamp_f32` and `v_log_clamp_f32` to the unclamped ops (GCN: Inf becomes
++-FLT_MAX). The game uses `v_mul_legacy`, `v_mac_legacy`, `v_mad_legacy` and `v_rsq_clamp` (a
+"Shader: game uses …" line is logged once for each). `v_rcp_legacy_f32` took the sign from a
+value conversion instead of the bits. Second part: Metal's fast math (the default) folds
+`isnan`/`isinf` to false, which turned every NaN-safe translation (legacy min/max, `v_cmp_class`,
+these ops) back into plain ones; NaN and Inf are now tested on the bit pattern, and the clamp
+output modifier turns NaN into 0 as GCN does. Shader cache meta version 11 (rebuilt once).
+City at 1080p still holds 60 FPS; all 214 pipelines of the test cache build in Metal.
