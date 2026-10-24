@@ -1601,3 +1601,33 @@ Moving sessions, A/B within one session (switched every 30 s by the toggle file;
 | 128 | no copy bursts |
 
 `BB_DIRECT_READBACK=0/1/verify` sets the read-back mode at start.
+
+## Read-backs whose writer has not completed: wait for that command buffer (M3 Pro, 2026-10-24)
+
+With direct read-backs, about 7% of the read-backs while moving still found the faulting page's writer not
+complete. Those took the old path: stage A drained, copied on the GPU and ran `Finish()`, so the frame stood
+still. One session had 37 of them in 5 min, 612 ms in total, up to 86 ms each. 22 of the 37 writers were already
+committed; 15 were still being recorded.
+
+**Now the fault thread waits for that command buffer alone** (`BufferCache::WaitForWriter`):
+- **A committed writer:** `Scheduler::WaitCommitted`, on the timeline's completion tick. No renderer lock is held.
+- **A writer still being recorded:** stage A first commits it with `Flush()`, at the point where the old path ran
+  its download and `Finish()`.
+
+The direct copy then runs again. After two waits, a writer that is still incomplete takes the old path. Split
+ticks are now marked before the commit too, and the completeness check reads them again once a tick shows
+complete.
+
+**Moving A/B in one session** (fix off / on / verify, 30 s each):
+- **Per incident:** ~41 ms on the old path, with the frame stopped, against ~15 ms of the fault thread's wait,
+  with the frame going on.
+- **Late flips from game write faults:** 5.0 → 2.3 per minute. The game's fault wait in late frames: 276 → 176
+  ms/min.
+- **Verify with the waits:** 326 checks while moving and 13 at a level entry, 0 mismatches.
+
+**Death reloads** (10 deaths with the fix, 5 without): the same late flips with and without it, 24.7 vs 25.7 per
+minute over 24 ms in the 25 s after a death. Those come from the reload's streaming and the memory pressure after
+it.
+
+**Switches** (second toggle word): bit 256 turns the waits off; bit 512 only waits for committed writers, with no
+commit requests.

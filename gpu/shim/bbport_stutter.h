@@ -292,6 +292,18 @@ inline bool CopyBurstsOff() {
     return (toggles2.load(std::memory_order_relaxed) & 128) != 0;
 }
 
+/// Phase 1b switches (second toggle word): bit 8 = a read-back whose writer has not completed
+/// takes the old path; bit 9 = only writers already committed are waited for (no commit request
+/// through the GPU command thread). BufferCache::WaitForWriter.
+inline bool WriterWaitOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 256) != 0;
+}
+inline bool WriterCommitOff() {
+    return (toggles2.load(std::memory_order_relaxed) & 512) != 0;
+}
+/// Set on bbgpu-host's fault thread (bbgpu_host_fault): the only thread that waits for writers.
+inline thread_local bool tls_fault_thread = false;
+
 enum DirectMode : int { DirectOff, DirectOn, DirectVerify };
 /// BB_DIRECT_READBACK=0 (off), 1 (default) or verify (decide and snapshot, but take the old path,
 /// then compare the bytes it wrote with the snapshot; for testing the writer stamps).
@@ -364,6 +376,9 @@ struct DirectStats {
     std::atomic<u64> count{0}, ns{0}, pages{0}, bytes{0}, other_pages_left{0};
     std::array<std::atomic<u64>, NumFallbacks> fallbacks{};
     std::atomic<u64> verified{0}, verify_mismatches{0}, verify_skipped{0};
+    /// Phase 1b: waits of the fault thread for a writer that had not completed, those whose
+    /// writer the GPU command thread committed first, and their time.
+    std::atomic<u64> writer_waits{0}, writer_commits{0}, writer_wait_ns{0}, writer_wait_max_ns{0};
 };
 inline DirectStats direct;
 
@@ -472,7 +487,8 @@ inline void PrintWindow(double window_s, u64 frames) {
             }
         }
         std::printf("Direct read-backs (%.1f s): %llu, %.2f ms, %llu pages, %.1f MB, %llu window pages "
-                    "left GPU-modified; old path: %s; verify: %llu checked, %llu mismatches, %llu "
+                    "left GPU-modified; writer waits: %llu (%llu committed for it), %.2f ms (max "
+                    "%.2f); old path: %s; verify: %llu checked, %llu mismatches, %llu "
                     "skipped | t=%.3f\n",
                     window_s, static_cast<unsigned long long>(n_direct),
                     direct.ns.exchange(0, std::memory_order_relaxed) / 1e6,
@@ -480,6 +496,12 @@ inline void PrintWindow(double window_s, u64 frames) {
                     direct.bytes.exchange(0, std::memory_order_relaxed) / 1e6,
                     static_cast<unsigned long long>(
                         direct.other_pages_left.exchange(0, std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(
+                        direct.writer_waits.exchange(0, std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(
+                        direct.writer_commits.exchange(0, std::memory_order_relaxed)),
+                    direct.writer_wait_ns.exchange(0, std::memory_order_relaxed) / 1e6,
+                    direct.writer_wait_max_ns.exchange(0, std::memory_order_relaxed) / 1e6,
                     reasons.empty() ? "none" : reasons.c_str(),
                     static_cast<unsigned long long>(direct.verified.exchange(0, std::memory_order_relaxed)),
                     static_cast<unsigned long long>(

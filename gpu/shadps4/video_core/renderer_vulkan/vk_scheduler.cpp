@@ -602,9 +602,18 @@ u64 Scheduler::SubmitExecution() {
     // Through the draw runs: no patch draw is left waiting, and their scratch memory is
     // handed to this submission's tick.
     draw_run_open = false;
+    // A bound write not yet recorded lands in a later command buffer: its tick is marked split
+    // before the commit, so whoever sees this tick complete also sees the split (direct
+    // read-backs check again once a tick completed), and after it in case one was bound meanwhile.
+    const u64 next_tick = timeline.CurrentTick();
+    const bool split_before = gpu_write_unrecorded.load(std::memory_order_relaxed);
+    if (split_before) {
+        BbStutter::MarkSplit(next_tick);
+    }
     const u64 tick = timeline.Committed(draw_runs.Submit(encoder));
-    if (gpu_write_unrecorded.load(std::memory_order_relaxed)) {
-        BbStutter::MarkSplit(tick); // a bound write lands in a later command buffer
+    if (gpu_write_unrecorded.load(std::memory_order_relaxed) &&
+        !(split_before && tick == next_tick)) {
+        BbStutter::MarkSplit(tick);
     }
     debug_groups = 0; // Encoder::Submit closed them
     draw_runs.ReportSkips(); // dropped draws by reason, every 5 s when there are any
