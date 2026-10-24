@@ -82,6 +82,7 @@ final class LauncherModel: ObservableObject {
     func checkGame() {
         guard let folder = config.gameDir else {
             gameProblem = "Choose the game folder (CUSA03173 with update 1.09, the folder containing eboot.bin)."
+            NSApplication.shared.applicationIconImage = nil
             return
         }
         checkingGame = true
@@ -92,9 +93,21 @@ final class LauncherModel: ObservableObject {
                 if self.config.gameDir == folder {
                     self.gameProblem = problem
                     self.checkingGame = false
+                    if problem == nil {
+                        self.applyGameIcon(from: folder)
+                    } else {
+                        NSApplication.shared.applicationIconImage = nil
+                    }
                 }
             }
         }
+    }
+
+    private func applyGameIcon(from folder: URL) {
+        let iconURL = folder.appendingPathComponent("sce_sys/icon0.png")
+        guard FileManager.default.fileExists(atPath: iconURL.path),
+              let iconImage = NSImage(contentsOf: iconURL) else { return }
+        NSApplication.shared.applicationIconImage = iconImage
     }
 
     private func pickFolder(_ message: String, start: URL?) -> URL? {
