@@ -57,6 +57,12 @@ enum SessionLog {
     static let previousName = "game.previous.log"
     /// Sessions kept (their .log and .jsonl); older ones are removed when a session starts.
     static let keep = 20
+    /// One session's .log and .jsonl together; past it only the last `tailLines` lines are
+    /// written, at the end (SessionLogWriter). A normal session is well under 1 MB.
+    static let maxSessionBytes = 64 << 20
+    static let tailLines = 1_000
+    /// All kept sessions together: the oldest are removed past it when a session starts.
+    static let maxFolderBytes = 256 << 20
 
     // MARK: Severity
 
@@ -246,7 +252,9 @@ enum SessionLog {
 
     /// A new session: migrates old logs, removes sessions beyond `keep`, creates the session's
     /// two files and points game.log / game.previous.log at the new and the last text log.
-    static func begin(in folder: URL, start: Date) throws -> (text: URL, json: URL) {
+    /// `keep` and `budget` (bytes for the earlier sessions): parameters for the tests.
+    static func begin(in folder: URL, start: Date, keep: Int = SessionLog.keep,
+                      budget: Int = SessionLog.maxFolderBytes - SessionLog.maxSessionBytes) throws -> (text: URL, json: URL) {
         let fm = FileManager.default
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         migrateOldLogs(in: folder)
@@ -258,10 +266,24 @@ enum SessionLog {
         }
         let text = folder.appendingPathComponent(stem + ".log")
         let json = folder.appendingPathComponent(stem + ".jsonl")
-        let earlier = sessions(in: folder)
-        for old in earlier.dropLast(max(0, keep - 1)) {
+        var earlier = sessions(in: folder)
+        func remove(_ old: URL) {
             try? fm.removeItem(at: old)
             try? fm.removeItem(at: old.deletingPathExtension().appendingPathExtension("jsonl"))
+        }
+        for old in earlier.dropLast(max(0, keep - 1)) { remove(old) }
+        earlier = Array(earlier.suffix(max(0, keep - 1)))
+        // Then the size budget, oldest first; the new session gets maxSessionBytes of it.
+        func size(_ url: URL) -> Int {
+            [url, url.deletingPathExtension().appendingPathExtension("jsonl")].reduce(0) {
+                $0 + ((try? fm.attributesOfItem(atPath: $1.path))?[.size] as? Int ?? 0)
+            }
+        }
+        var total = earlier.reduce(0) { $0 + size($1) }
+        while let oldest = earlier.first, total > budget {
+            total -= size(oldest)
+            remove(oldest)
+            earlier.removeFirst()
         }
         fm.createFile(atPath: text.path, contents: nil)
         fm.createFile(atPath: json.path, contents: nil)

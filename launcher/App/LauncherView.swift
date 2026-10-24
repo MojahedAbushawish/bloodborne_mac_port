@@ -275,7 +275,7 @@ private struct CrashReportView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Bloodborne stopped").font(.title2.bold())
             Text(report.summary)
-            Text("Please report it so it can be fixed: Report on GitHub opens a new issue with this report filled in, and shows a diagnostics zip (the full log and macOS's crash reports) to drag onto it. Nothing is sent until you submit the issue; your home folder is shown as ~.")
+            Text("Please report it so it can be fixed: Report on GitHub opens a new issue with this report filled in, and shows a diagnostics zip (the full log and macOS's crash reports) to drag onto it. Nothing is sent until you submit the issue. Your home folder is shown as ~; other paths (a drive under /Volumes) appear as they are.")
                 .font(.callout).foregroundStyle(.secondary)
             ScrollView {
                 Text(report.report)

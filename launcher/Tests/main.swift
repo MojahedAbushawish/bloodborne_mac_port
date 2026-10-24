@@ -445,6 +445,20 @@ do {
     check(jsonCount == SessionLog.keep, "their JSON logs too (\(jsonCount))")
     try? fm.removeItem(at: folder)
 
+    // The size budget: the oldest sessions go first, whatever the count.
+    try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+    var made: [URL] = []
+    for i in 0..<5 {
+        if let files = try? SessionLog.begin(in: folder, start: t.addingTimeInterval(Double(i) * 60), budget: 2_500) {
+            try? Data(count: 600).write(to: files.text)
+            try? Data(count: 400).write(to: files.json)
+            made.append(files.text)
+        }
+    }
+    let afterBudget = SessionLog.sessions(in: folder).map(\.lastPathComponent)
+    check(afterBudget == made.suffix(3).map(\.lastPathComponent), "budget keeps the newest sessions that fit: \(afterBudget)")
+    try? fm.removeItem(at: folder)
+
     // Crash report from a timestamped session log.
     let mac = SystemInfo(appVersion: "0.5.4", model: "Mac15,8", chip: "Apple M3 Max", memoryGB: 64, macOS: "Version 26.6 (Build 25G62)")
     let lines: [LogEntry] = [

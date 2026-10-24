@@ -468,7 +468,9 @@ using them; move `user/` and `bbport.ini` to the folder above to switch.
 ### Logs
 
 Each game session started from the launcher writes two logs to **`~/Library/Logs/Bloodborne`**,
-named by the time it started; the last 20 sessions are kept:
+named by the time it started. The last 20 sessions are kept, at most 256 MB in all, and one
+session's logs stop at 64 MB (a normal session is well under 1 MB): past that only its last
+1,000 lines are written, when the game ends, after a line saying how many were left out.
 
 - `game-2026-10-22_14-03-05.log`: the game's output, each line with its time and a syslog
   severity (`CRIT`, `ERROR`, `WARN`, `NOTICE`, `INFO`, `DEBUG`):
@@ -484,13 +486,16 @@ named by the time it started; the last 20 sessions are kept:
   `log.level`, `syslog.severity.code`, `log.logger` (who wrote the line: `runtime`, `bbgpu-host`,
   `gpu.render.vulkan`, ...), `message`, `session.id` and `service.version`.
 
-`game.log` and `game.previous.log` link to the last two sessions' `.log` files. The lines also go
-to the macOS system log (unified logging), with the line's source as its category: open
-**Console.app** and search for `bloodborne-mac-port`, or in Terminal:
+`game.log` and `game.previous.log` link to the last two sessions' `.log` files. Warnings and
+errors also go to the macOS system log (unified logging), with the line's source as its category:
+open **Console.app** and search for `bloodborne-mac-port`, or in Terminal:
 
 ```sh
-/usr/bin/log stream --info --predicate 'subsystem == "io.github.wooloomooloo2.bloodborne-mac-port"'
+/usr/bin/log stream --predicate 'subsystem == "io.github.wooloomooloo2.bloodborne-mac-port"'
 ```
+
+The game never depends on the logs: if the launcher quits or a log can't be written (a full
+disk), the game keeps running and only those lines are lost.
 
 The severity is read from the line itself: `Crash:` lines are critical, `STOP:` and `ERROR:` lines
 errors, the GPU library's own levels (`<Warning>`, `<Error>`) are kept, and lines saying something
@@ -501,7 +506,9 @@ itself, puts a diagnostics zip in `~/Library/Logs/Bloodborne/Reports` (the last 
 crash report, the session's `.log` and `.jsonl`, `bbport.ini`, `launch.conf`, and macOS's own
 crash reports (`.ips`) of the game's processes from that session. Their exception and crashed
 thread also go into the report. Your home folder is shown as `~`, and the identifiers macOS puts
-in `.ips` files (crash reporter key, sleep/wake and boot session ids) are removed. **Report on
+in `.ips` files (crash reporter key, sleep/wake and boot session ids) are removed. Other paths
+stay as they are: a game folder on an external drive shows as `/Volumes/<drive name>/...`, so
+check the report if a drive or folder name is private. **Report on
 GitHub** opens a new issue with the report already filled in (copied to the clipboard as well,
 for reports too long for the link) and shows the zip in Finder to drag onto the issue. Nothing is
 sent until you submit the issue.
