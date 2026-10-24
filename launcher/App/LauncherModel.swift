@@ -31,6 +31,8 @@ final class LauncherModel: ObservableObject {
     /// The running or last session's text log (SessionLog).
     @Published private(set) var sessionLog: URL?
     private var sessionStart: Date?
+    /// The mod folders the next launch loads (mods.json), for the footer's summary.
+    @Published private(set) var enabledMods: [String] = []
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -52,6 +54,9 @@ final class LauncherModel: ObservableObject {
         return info["CFBundleVersion"] as? String ?? info["CFBundleShortVersionString"] as? String ?? "development build"
     }
     var saveDir: URL { config.saveDir ?? SaveFolder.defaultURL(dataDir: dataDir) }
+    var modFiles: ModFiles { ModFiles(dataDir: dataDir, env: env) }
+    /// "2 mods · 1 cheat on" next to the Mods & Cheats… button.
+    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count) }
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
     }
@@ -77,7 +82,21 @@ final class LauncherModel: ObservableObject {
         let exists = FileManager.default.fileExists(atPath: settingsURL.path)
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
         settings = GameSettings(ini: settingsFile)
+        refreshEnabledMods()
         checkGame()
+    }
+
+    func refreshEnabledMods() {
+        let files = modFiles
+        enabledMods = ModsConfig.enabledMods(modsDir: files.mods, config: files.modsConfig)
+    }
+
+    /// The Cheats & Tweaks tab: bbport.ini at once (not while the game runs: its menu writes the
+    /// file too, and the launcher reads it again when the game ends).
+    func setCheat(_ name: String, on: Bool, cheats: [CheatInfo]) {
+        guard !running else { return }
+        settings.cheats = Cheats.toggle(name, on: on, in: settings.cheats, cheats: cheats)
+        save()
     }
 
     func save() {
@@ -207,6 +226,7 @@ final class LauncherModel: ObservableObject {
             config.saveDir = nil
             save()
         }
+        guard backUpSavesIfNeeded() else { onExit?(-1); return }
         let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir, env: env)
         do {
             let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
@@ -221,6 +241,27 @@ final class LauncherModel: ObservableObject {
         } catch {
             exitMessage = "The game could not start: \(error.localizedDescription)"
             onExit?(-1)
+        }
+    }
+
+    /// Mods and cheats can change what ends up in the save: the first launch with a set not seen
+    /// before copies the save folder to <data>/save-backups/<date>/savedata (the newest five
+    /// stay). False: the copy failed and the player cancelled.
+    private func backUpSavesIfNeeded() -> Bool {
+        refreshEnabledMods()
+        let backups = modFiles.backups
+        let signature = ModSignature(mods: enabledMods, cheats: settings.cheats)
+        guard SaveBackup.needed(signature, last: SaveBackup.lastSignature(backups: backups)) else { return true }
+        do {
+            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, signature: signature)
+            return true
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Your save could not be backed up"
+            alert.informativeText = "The launcher backs up your save before the first launch with a new set of mods or cheats, and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
+            alert.addButton(withTitle: "Play Anyway")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
         }
     }
 

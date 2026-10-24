@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model = LauncherModel(layout: layout)
         model.onStarted = { [weak self] in
             self?.window?.orderOut(nil)
+            ModsWindow.hide()
             NSApp.setActivationPolicy(.accessory) // the game's window has the Dock icon
         }
         model.onExit = { [weak self] status in self?.gameEnded(status) }
