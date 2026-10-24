@@ -21,6 +21,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Life after Rosetta: evaluate bloodborne-recomp (2026-10-24, after 0.6.0).** The game side
+  (bb-probe and the HLE runtime in `src/`) runs under Rosetta 2, which Apple supports fully only
+  through macOS 27. github.com/bloodborne-native/bloodborne-recomp (GPL-2.0-or-later) recompiles
+  all 241,031 eligible game functions to C and runs the whole game natively on arm64 (with bbcpu,
+  an interpreter and translator, as the fallback), but uses 20-30% more CPU than their translator
+  and has not been compared with Rosetta. Our `static-recompilation` branch stopped at 47,125
+  lifted functions. *Next:* a spike, not adoption: can our loader call their `librecomp.dylib`;
+  what building `src/` for arm64 takes; recompiled vs Rosetta CPU time on the M4 Max.
+  Collaborating beats duplicating.
 - **Signals into guest threads break the game (2026-10-21).** SIGPROF sent to the main thread
   every 1 ms (a sampler's first version) made texture streaming fail every time within minutes
   (`CSGXTextureCreateFragment.cpp(137)` panic, then the game's deliberate null write), even with
