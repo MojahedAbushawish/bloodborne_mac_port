@@ -33,12 +33,14 @@ highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion 
 0.5.5 is a full release of the 0.5.4.3 to 0.5.4.5 pre-releases, plus one new fix. The first launch
 rebuilds the shader cache once (a minute or so of stutter).
 
-- **Red flashes are gone from breath and other effects** (new in 0.5.5). In cold areas such as
-  Cainhurst, the hunter's breath could flash as a bright red ball every few seconds. The PS4's GPU
+- **Red flashes on breath and other effects** (new in 0.5.5). In cold areas such as Cainhurst,
+  the hunter's breath could flash as a bright red ball every few seconds. The PS4's GPU
   has float instructions that turn infinities and invalid values into 0 or the largest normal
   number. The shader translator turned several of them into ordinary maths, and Metal's fast maths
   removed the checks for invalid values, so one bad pixel bloomed into a red ball. Those
-  instructions now follow the PS4's rules.
+  instructions now follow the PS4's rules: in testing, flashes went from about 1 frame in 60 to
+  fewer than 1 in 500 with the first half of the fix, and the second half targets the rest. If you
+  still see one, please report where.
 - **Fixed game timing by default, so lifts no longer drop you through the floor.** The port always
   advanced the game by each frame's measured time, so on uneven frames the character could sink
   through a moving lift and die. At the 60 and 90 FPS caps the game now runs in fixed steps (the
