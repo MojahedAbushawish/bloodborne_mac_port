@@ -154,13 +154,19 @@ private:
     /// the lazy arena's CPU view, when the command buffers that wrote the faulting page have
     /// completed (bbport_stutter.h, stutter plan phase 1). False: nothing changed, take the old
     /// path. `verify`: decide and snapshot the bytes, change nothing, return false.
+    /// `pending_writer`: when the faulting page's writer has not completed, receives its tick and
+    /// the fallback is left to the caller to count (it may wait for that writer and try again).
     struct VerifyEntry {
         VAddr address;
         u64 stamp;
         std::vector<u8> bytes;
     };
     bool TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
-                           std::vector<VerifyEntry>* verify);
+                           std::vector<VerifyEntry>* verify, u64* pending_writer = nullptr);
+    /// bbport: blocks the fault thread until the command buffer of `tick` completed; one still
+    /// being recorded is committed first by the GPU command thread (stutter plan phase 1b). False:
+    /// not waited (switched off, not the fault thread, or still not committed), take the old path.
+    bool WaitForWriter(u64 tick);
     /// After the old path ran in verify mode: compares guest memory with the snapshot.
     void CheckDirectReadBack(const std::vector<VerifyEntry>& snapshot);
 

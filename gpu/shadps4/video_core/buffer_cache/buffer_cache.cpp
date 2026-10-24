@@ -230,14 +230,34 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         const int mode = BbStutter::DirectReadbackMode();
         if (mode == BbStutter::DirectOff) {
             BbStutter::direct.fallbacks[BbStutter::FbOff].fetch_add(1, std::memory_order_relaxed);
-        } else if (TryDirectReadBack(device_addr, size, is_write,
-                                     mode == BbStutter::DirectVerify ? &snapshot : nullptr)) {
-            if (stats) {
-                record.direct = true;
-                record.total_ns = BbStutter::NowNs() - record.start_ns;
-                BbStutter::NoteReadback(record);
+        } else {
+            auto* const verify = mode == BbStutter::DirectVerify ? &snapshot : nullptr;
+            u64 writer = 0;
+            bool done = TryDirectReadBack(device_addr, size, is_write, verify, &writer);
+            // bbport: the faulting page's writer has not completed (7% of read-backs while
+            // moving; on the old path their Finish() waited for the whole queue while the frame
+            // stood still: 37 in 5 min, 612 ms, up to 86 ms, play-lazy-0043). Wait for that
+            // command buffer alone and copy directly (phase 1b). A second try covers a writer
+            // whose commit was split meanwhile (the next tick holds its writes).
+            for (u32 attempt = 0; !done && writer != 0 && attempt < 2; ++attempt) {
+                if (!WaitForWriter(writer)) {
+                    break;
+                }
+                writer = 0;
+                done = TryDirectReadBack(device_addr, size, is_write, verify, &writer);
             }
-            return;
+            if (writer != 0) {
+                BbStutter::direct.fallbacks[BbStutter::FbNotComplete].fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+            if (done) {
+                if (stats) {
+                    record.direct = true;
+                    record.total_ns = BbStutter::NowNs() - record.start_ns;
+                    BbStutter::NoteReadback(record);
+                }
+                return;
+            }
         }
     }
     const auto flush_request = [this, device_addr, size, is_write, stats] {
@@ -281,8 +301,40 @@ extern "C" int runtime_memory_write_backing_locked(uintptr_t address, const void
                                                    uint64_t size);
 extern "C" int runtime_memory_read_backing(uintptr_t address, void* out, uint64_t size);
 
+bool BufferCache::WaitForWriter(u64 tick) {
+    if (BbStutter::WriterWaitOff() || !BbStutter::tls_fault_thread) {
+        return false;
+    }
+    const u64 start_ns = BbStutter::NowNs();
+    auto& stats = BbStutter::direct;
+    if (tick >= scheduler.CurrentTick()) {
+        if (BbStutter::WriterCommitOff()) {
+            return false;
+        }
+        // Still being recorded: the GPU command thread commits it, where the old path ran its
+        // download and Finish() (the same point in the stream), without waiting for the GPU.
+        liverpool->SendCommand<true>([this, tick] {
+            if (tick >= scheduler.CurrentTick()) {
+                scheduler.Flush();
+            }
+        });
+        stats.writer_commits.fetch_add(1, std::memory_order_relaxed);
+        if (tick >= scheduler.CurrentTick()) {
+            return false;
+        }
+    }
+    // Committed ticks complete on their own (completion handlers raise the device's tick): no
+    // lock of the renderer is held here, and the frame goes on meanwhile.
+    scheduler.WaitCommitted(tick);
+    const u64 ns = BbStutter::NowNs() - start_ns;
+    stats.writer_waits.fetch_add(1, std::memory_order_relaxed);
+    stats.writer_wait_ns.fetch_add(ns, std::memory_order_relaxed);
+    BbStutter::AtomicMax(stats.writer_wait_max_ns, ns);
+    return true;
+}
+
 bool BufferCache::TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
-                                    std::vector<VerifyEntry>* verify) {
+                                    std::vector<VerifyEntry>* verify, u64* pending_writer) {
     auto& stats = BbStutter::direct;
     const auto fallback = [&stats](u32 reason) {
         stats.fallbacks[reason].fetch_add(1, std::memory_order_relaxed);
@@ -315,8 +367,15 @@ bool BufferCache::TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
     bool handled = false;
     u64 pages_copied = 0, bytes = 0, pages_left = 0;
     const auto complete = [this](u64 stamp) {
-        return stamp != 0 && scheduler.IsFree(BbStutter::EffectiveTick(stamp));
+        if (stamp == 0) {
+            return false;
+        }
+        // Read again once the tick completed: a split is marked before its commit, so it shows
+        // by then (the fault thread now checks right as a writer it waited for completes).
+        const u64 tick = BbStutter::EffectiveTick(stamp);
+        return scheduler.IsFree(tick) && BbStutter::EffectiveTick(stamp) == tick;
     };
+    u64 writer_tick = 0;
     std::scoped_lock readback_lock{readback_mutex};
     const bool tracked = memory_tracker->WithRegionLocked(device_addr, [&](RegionManager& region) {
         if (!region.IsRegionModified<Type::GPU>(device_addr - region.GetCpuAddr(), size)) {
@@ -340,6 +399,7 @@ bool BufferCache::TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
         }
         if (!complete(stamp)) {
             reason = BbStutter::FbNotComplete;
+            writer_tick = BbStutter::EffectiveTick(stamp);
             return true;
         }
         // The window's GPU-modified pages whose writers completed (the faulting ones included);
@@ -399,6 +459,10 @@ bool BufferCache::TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
         return fallback(BbStutter::FbNoRegion);
     }
     if (!handled) {
+        if (reason == BbStutter::FbNotComplete && pending_writer) {
+            *pending_writer = writer_tick; // counted by the caller if it takes the old path
+            return false;
+        }
         return fallback(reason);
     }
     stats.count.fetch_add(1, std::memory_order_relaxed);

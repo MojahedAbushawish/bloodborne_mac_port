@@ -914,6 +914,12 @@ public:
         return timeline.IsFree(tick);
     }
 
+    /// bbport: blocks any thread until `tick`, already committed, completed. Unlike Wait() it never
+    /// flushes (the fault thread's writer waits, BufferCache::WaitForWriter).
+    void WaitCommitted(u64 tick) {
+        timeline.Wait(tick);
+    }
+
     /// The highest of this scheduler's ticks known complete.
     [[nodiscard]] u64 KnownGpuTick() const {
         return timeline.KnownGpuTick();

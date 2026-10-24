@@ -344,6 +344,7 @@ extern "C" int bbgpu_host_fault(uint64_t address, int write) {
     }
     if (write) {
         BbStats::Timer timer{BbStats::t_write_faults};
+        BbStutter::tls_fault_thread = true; // may wait for GPU writers (WaitForWriter)
         if (!BbStats::enabled) {
             return rasterizer->OnWriteFault(address, false) ? 1 : 0;
         }
