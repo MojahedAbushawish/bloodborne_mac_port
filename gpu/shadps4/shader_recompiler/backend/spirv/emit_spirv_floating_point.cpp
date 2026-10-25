@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
@@ -14,23 +15,27 @@ namespace Shader::Backend::SPIRV {
 // multiply and FMA into a call to an [[clang::optnone]] helper, which the Metal compiler cannot
 // optimize: on every fragment and compute shader that cost the city scene 19.6 -> 12.1 ms of
 // GPU time per frame. Default (BB_SPIRV_PRECISE=invariant): positions are declared Invariant
-// instead, compiled with preserveInvariance (renderer_metal/mtl_shader.mm BuildLibrary): Metal
-// then guarantees matching positions across shaders without turning every vertex-stage add and
-// multiply into a helper call (+14-20% FPS at native 1080p on an M3 Pro, 2026-10-17, MoltenVK).
+// instead of NoContraction in the vertex stages, compiled with preserveInvariance
+// (renderer_metal/mtl_shader.mm BuildLibrary), so Metal keeps positions matching across shaders
+// without turning every vertex-stage add and multiply into a helper call: +12% FPS at native
+// 1080p on an M3 Pro (FINDINGS 2026-10-19), +15% at 1440p on an M4 Max with matching screenshots
+// (FINDINGS 2026-10-21). BB_SPIRV_PRECISE=vertex: NoContraction in every non-fragment,
+// non-compute stage (the default until 0.5.3).
 // Stages whose positions do not leave through a vertex function keep NoContraction:
 // tessellation evaluation (MoltenVK dropped Invariant on post-tessellation vertex functions) and
 // the geometry stage and its export stage, which the Metal renderer runs as compute kernels.
-// BB_SPIRV_PRECISE=vertex: NoContraction in every non-fragment, non-compute stage (until
-// 2026-10-17); =all: everywhere; =none: nowhere (experiments). The mode is part of the shader
-// cache version (vk_pipeline_serialization.cpp), so switching it rebuilds the cache.
+// Dropping NoContraction without Invariant broke geometry on MoltenVK (FINDINGS 2026-10-13).
+// =all: everywhere; =none: nowhere (experiments). The mode is part of the shader cache version
+// (vk_pipeline_serialization.cpp), so switching it rebuilds the cache.
 int PreciseMode() {
     static const int mode = [] {
         const char* env = std::getenv("BB_SPIRV_PRECISE");
-        return !env                        ? 3
-               : !std::strcmp(env, "vertex") ? 0
-               : !std::strcmp(env, "all")    ? 1
-               : !std::strcmp(env, "none")   ? 2
-                                             : 3;
+        return !env                           ? 3
+               : !std::strcmp(env, "vertex")    ? 0
+               : !std::strcmp(env, "invariant") ? 3
+               : !std::strcmp(env, "all")       ? 1
+               : !std::strcmp(env, "none")      ? 2
+                                                : 3;
     }();
     return mode;
 }
@@ -186,10 +191,20 @@ Id EmitFPSqrt(EmitContext& ctx, Id value) {
     return ctx.OpSqrt(ctx.F32[1], value);
 }
 
+// bbport: NaN and Inf tested on the bit pattern. Metal's fast math (our default) assumes neither
+// exists and folds isnan/isinf to false, which turned GCN's NaN-safe ops (clamp, legacy min/max,
+// v_cmp_class) back into plain ones: a red bloom ball on the hunter's breath in Cainhurst.
+static Id MagnitudeBits32(EmitContext& ctx, Id value) {
+    return ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpBitcast(ctx.U32[1], value),
+                            ctx.ConstU32(0x7fffffffu));
+}
+
 Id EmitFPSaturate32(EmitContext& ctx, Id value) {
     const Id zero{ctx.ConstF32(f32{0.0})};
     const Id one{ctx.ConstF32(f32{1.0})};
-    return ctx.OpFClamp(ctx.F32[1], value, zero, one);
+    // bbport: GCN's clamp modifier turns NaN into 0 (FClamp leaves NaN undefined).
+    return ctx.OpSelect(ctx.F32[1], EmitFPIsNan32(ctx, value), zero,
+                        ctx.OpFClamp(ctx.F32[1], value, zero, one));
 }
 
 Id EmitFPSaturate64(EmitContext& ctx, Id value) {
@@ -415,7 +430,7 @@ Id EmitFPIsNan16(EmitContext& ctx, Id value) {
 }
 
 Id EmitFPIsNan32(EmitContext& ctx, Id value) {
-    return ctx.OpIsNan(ctx.U1[1], value);
+    return ctx.OpUGreaterThan(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
 }
 
 Id EmitFPIsNan64(EmitContext& ctx, Id value) {
@@ -423,7 +438,7 @@ Id EmitFPIsNan64(EmitContext& ctx, Id value) {
 }
 
 Id EmitFPIsInf32(EmitContext& ctx, Id value) {
-    return ctx.OpIsInf(ctx.U1[1], value);
+    return ctx.OpIEqual(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
 }
 
 Id EmitFPIsInf64(EmitContext& ctx, Id value) {

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
  * by the window thread (gpu/shim/window.cpp); here state is only sampled.
  *
@@ -20,7 +21,6 @@
 #include <math.h>
 #include <sys/stat.h>
 #ifdef __APPLE__
-#include "gpu_process.h"
 #include "host/bbgpu_shared.h"
 #endif
 
@@ -152,8 +152,6 @@ static void sample_devices(PadData *d) {
         {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2},
         {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
         {SDL_SCANCODE_F1,BTN_OPTIONS}, {SDL_SCANCODE_O,BTN_OPTIONS},
-        {SDL_SCANCODE_UP,BTN_UP}, {SDL_SCANCODE_DOWN,BTN_DOWN},
-        {SDL_SCANCODE_LEFT,BTN_LEFT}, {SDL_SCANCODE_RIGHT,BTN_RIGHT},
         {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
     };
     for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
@@ -174,9 +172,13 @@ static void sample_devices(PadData *d) {
  * taken over while the mouse moves; gamepad and keyboard keep it otherwise. */
 #define MOUSE_FULL_SPEED 650.0
 #define MOUSE_MIN_DEFLECTION 24.0
+/* The GPU process's shared control block: gpu_process.c registers its accessor when it starts.
+ * Without one (the unit tests link the runtime without gpu_process.c) there is no mouse. */
+static void *(*pad_shared)(void);
+void runtime_pad_set_shared(void *(*shared)(void)) { pad_shared=shared; }
 static void add_mouse(PadData *d) {
 #ifdef __APPLE__
-    const BbGpuShared *s=(const BbGpuShared *)gpu_process_shared();
+    const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
     if (!s || !__atomic_load_n(&s->mouse_captured,__ATOMIC_ACQUIRE) || bbgpu_overlay_captures_input()) return;
     const uint32_t b=__atomic_load_n(&s->mouse_buttons,__ATOMIC_RELAXED);
     if (b & SDL_BUTTON_LMASK) d->buttons|=BTN_R1;
@@ -263,7 +265,8 @@ static void record_sample(const PadData *d) {
     static const char *path; static int checked, f9_was_down;
     if (!checked) { path=getenv("BB_PAD_RECORD"); checked=1; }
     if (!path || !*path || !sdl_ready) return;
-    const bool *k=SDL_GetKeyboardState(NULL);
+    const bool *k=bbgpu_split_keyboard(); /* the window is in the GPU host (split) */
+    if (!k) k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     const int f9=k && k[SDL_SCANCODE_F9];
     if (f9 && !f9_was_down) {
         if (record_file) {
@@ -287,6 +290,19 @@ static void record_sample(const PadData *d) {
     fflush(record_file);
 }
 static PadSample *replay; static size_t replay_count, replay_next;
+/* Benchmark traversal: the replay's clock is the game's own frames at 60 per second (the fixed
+ * timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. The game
+ * reads the pad once per frame (7815 reads for 7815 frames shown on the route), so the read count
+ * is that clock. The GPU host's presented frames lag the game by a varying frame or two: as the
+ * clock they let an input land a frame early or late, and the route split into different paths
+ * after about a minute. */
+static int replay_by_frames;
+static uint64_t replay_start_flips;
+static size_t replay_start_reads;
+static uint32_t replay_ms(void) {
+    if (replay_by_frames) return (uint32_t)((reads-replay_start_reads)*1000/60);
+    return (uint32_t)((now_us()-replay_start)/1000);
+}
 static void replay_sample(PadData *d) {
     if (!replay_armed) return;
     if (!replay_start) {
@@ -305,13 +321,19 @@ static void replay_sample(PadData *d) {
             printf("Runtime: pad replay of %zu samples from %s\n",replay_count,path ? path : "(unset)");
         }
         replay_start=now_us();
+        replay_start_flips=bbgpu_bench_host_flips();
+        replay_start_reads=reads;
         replay_next=0;
     }
-    const uint32_t ms=(uint32_t)((now_us()-replay_start)/1000);
+    const uint32_t ms=replay_ms();
     while (replay_next<replay_count && replay[replay_next].ms<=ms) ++replay_next;
     if (!replay_next) return;
     if (replay_next==replay_count && ms>replay[replay_count-1].ms+500) {
-        if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; }
+        if (replay_armed==1) {
+            printf("Runtime: pad replay finished (%zu pad reads, %llu frames shown)\n",reads-replay_start_reads,
+                   (unsigned long long)(bbgpu_bench_host_flips()-replay_start_flips));
+            replay_armed=2;
+        }
         return;
     }
     const PadSample *s=&replay[replay_next-1];
@@ -335,9 +357,66 @@ static void touch_ids(PadData *d) {
     else if (!since) since=d->timestamp;
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
+/* Benchmark (BB_BENCHMARK=traversal|throughput, docs/DESIGN_BENCHMARK.md): presses Cross until a
+ * save starts loading (title, then Continue), waits for gameplay (the GPU host's draws a frame),
+ * then measures: traversal replays BB_PAD_REPLAY by frames, throughput stands BB_BENCH_SECONDS.
+ * The player's own input is ignored throughout. The GPU host records while the phase is 1. */
+static int bench_mode=-1; /* 0 off, 1 traversal, 2 throughput */
+static void bench_fail(int *state, const char *why) {
+    printf("Benchmark: failed: %s\n",why);
+    bbgpu_bench_set_phase(3,why);
+    *state=4;
+}
+static void bench_sample(PadData *d) {
+    if (bench_mode<0) {
+        const char *m=getenv("BB_BENCHMARK");
+        bench_mode=!m ? 0 : !strcmp(m,"traversal") ? 1 : !strcmp(m,"throughput") ? 2 : 0;
+        if (bench_mode) printf("Runtime: benchmark (%s): pressing Cross until a save loads\n",m);
+    }
+    if (!bench_mode) return;
+    d->buttons=0;
+    d->left_x=d->left_y=d->right_x=d->right_y=128;
+    d->l2=d->r2=0;
+    d->touch_count=0;
+    static int state; /* 0 title and menu, 1 loading, 2 settling, 3 measuring, 4 finished */
+    static uint64_t started, since, pressed, gameplay, heavy;
+    const uint64_t now=now_us();
+    if (!started) started=since=now;
+    if (state<3 && now-started>150000000) { bench_fail(&state,"no gameplay 150 s after the start"); return; }
+    if (state==3 && now-since>600000000) { bench_fail(&state,"the pass took over 10 minutes"); return; }
+    switch (state) {
+    case 0:
+        if (runtime_bench_map_opened) { state=1; since=now; puts("Runtime: benchmark: loading"); break; }
+        if (now-pressed>=2500000) pressed=now;
+        if (now-pressed<300000) d->buttons|=BTN_CROSS;
+        break;
+    case 1: /* gameplay: heavy frames (over 1000 draws) for 2 s, never a second without one;
+               uncapped, light frames come in between */
+        if (bbgpu_bench_frame_draws()>1000) { heavy=now; if (!gameplay) gameplay=now; }
+        else if (now-heavy>1000000) gameplay=0;
+        if (gameplay && now-gameplay>=2000000) { state=2; since=now; }
+        break;
+    case 2:
+        if (now-since<3000000) break;
+        state=3; since=now;
+        if (bench_mode==1) { replay_by_frames=1; replay_armed=1; replay_start=0; }
+        printf("Runtime: benchmark: measuring\n");
+        bbgpu_bench_set_phase(1,NULL);
+        break;
+    case 3: {
+        static double seconds;
+        if (!seconds) { const char *e=getenv("BB_BENCH_SECONDS"); seconds=e && atof(e)>0 ? atof(e) : 30; }
+        const int over=bench_mode==1 ? replay_armed==2 : now-since>=(uint64_t)(seconds*1e6);
+        if (over) { state=4; puts("Runtime: benchmark: done"); bbgpu_bench_set_phase(2,NULL); }
+        break;
+    }
+    default: break;
+    }
+}
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
+    bench_sample(d);
     record_sample(d);
     read_inject();
     replay_sample(d);

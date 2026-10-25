@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* End-to-end test of the GPU process split (M3) without the game: this x86-64 program (under
  * Rosetta) plays bb-probe. It starts the native arm64 bbgpu-host (gpu_process.c), starts the
  * renderer there (bbgpu_init_remote) and calls the real GnmDriver/VideoOut HLE functions, which
@@ -63,7 +64,6 @@ static void sleep_ms(unsigned ms) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     CHECK(!runtime_memory_reserve_space(), "cannot reserve the guest range");
-    setenv("BB_GPU_PROCESS", "1", 1);
     gpu_process_start();
     void *shared = gpu_process_shared();
     CHECK(shared, "the GPU host did not start (out/bbgpu-host built?)");

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
@@ -21,6 +22,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
+#include "video_core/renderer_metal/mtl_buffer.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -61,89 +63,69 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
 
     // bbport: Metal has no sparse buffers. One ordinary arena covers the start of the guest
     // GPU range instead (runtime_memory.c places guest memory from USER_MIN = 0x7000000000 on
-    // macOS). Requests outside it stop in GetArena.
-    // Size: the smallest of these, logged with what decided it.
-    // - Every address the guest can map: runtime_memory.c places direct and flexible memory
-    //   first-fit from USER_MIN, so they end below the direct pool (5056 MiB, or BB_DMEM_MB,
-    //   clamped as there) + flexible (448 MiB) + alignment gaps (256 MiB). Anything larger is
-    //   counted as device memory in use all the same (the texture cache's GC compares that with
-    //   its pressure marks: an 8 GiB arena on an 18 GB Mac kept it evicting live textures,
-    //   FINDINGS 2026-10-17) and is wired for the GPU for nothing.
-    // - A quarter of the Mac's memory, at least 8 GiB: the arena's memory is wired for the GPU
-    //   again and again, and with 16 GiB on a 36 GB Mac (M5 Max, macOS 27) that wiring never
-    //   settled. Metal System Trace: 254 GiB wired in 8 s, 224 GiB of it the 4 GiB arena pages;
-    //   GPU work started ~1.2 s after submission, 7 FPS. 12 GiB: 60 FPS with ~110 ms stalls four
-    //   times a second; 8 GiB: 60 FPS, the same scene. The lazily committed arena (mtl_buffer.mm,
-    //   BB_ARENA_LAZY) does not change this: on that Mac 16 GiB ran at 7-9 FPS lazy or not where
-    //   8 GiB ran at full speed (2026-10-18), so the cap does not depend on it.
-    // - The largest Metal buffer (maxBufferLength, below).
-    // BB_ARENA_MIB (rounded up to 64 MiB) or BB_ARENA_GIB set the size instead (e.g. for tools
-    // that snapshot every buffer: Metal frame capture fails on the full size).
+    // macOS); Metal commits its memory as it is touched.
+    // Requests outside it stop in GetArena (docs/MACOS_BACKLOG.md: per-page arenas).
     const u64 first_page = MacArenaBase >> ARENA_PAGE_BITS;
-    constexpr u64 ArenaGranularity = 64_MB;
+    // The arena is sized to the guest memory the game can map, not to the Mac: Metal wires the
+    // arena's memory for the GPU again and again, and the bigger it is the worse that gets. With
+    // 16 GiB on a 36 GB Mac (M5 Max, macOS 27) the wiring never settled (Metal System Trace:
+    // 254 GiB wired in 8 s, 224 GiB of it arena pages; 7 FPS); 12 GiB: 60 FPS with ~110 ms
+    // stalls; 8 GiB: 60 FPS. Lazy commit (mtl_buffer.mm, BB_ARENA_LAZY) does not change that.
+    // On 16 GB Macs 8 GiB was still too much: the GPU process sat at Metal's working-set limit
+    // (11.53 of 11.55 GB on an M1 Pro, issue #19) at 4-9 FPS.
+    // The game's direct and flexible memory sit together from MacArenaBase (runtime_memory.c):
+    // with the retail 5056 MiB of direct memory, every log so far ends its highest mapping at
+    // 4.80 GiB. The arena covers direct memory plus 1 GiB (flexible memory, 448 MiB, and room),
+    // rounded up to 512 MiB: 6 GiB, or 10 GiB with BB_DMEM_MB=9152 (run.sh's startup patch).
+    // Past it the game stops in GetArena, and "the game reached N GiB" is logged as it grows.
+    // BB_ARENA_GIB (at least 4) overrides: smaller arenas for tools that snapshot every buffer
+    // (Metal frame capture fails on large ones), larger ones for testing.
+    const char* reason = "the game's direct memory plus 1 GiB";
+    const u64 wanted_bytes = [&] {
+        if (const char* env = std::getenv("BB_ARENA_GIB")) {
+            if (const u64 gib = std::strtoull(env, nullptr, 10); gib >= 4) {
+                reason = "BB_ARENA_GIB";
+                return std::min<u64>(gib, 24) << 30;
+            }
+        }
+        // runtime_memory.c pool_size_bytes(): the same variable, the same bounds.
+        u64 dmem_mb = 0;
+        if (const char* env = std::getenv("BB_DMEM_MB")) {
+            dmem_mb = std::strtoull(env, nullptr, 10);
+        }
+        if (dmem_mb < 5056 || dmem_mb > 16384) {
+            dmem_mb = 5056;
+        }
+        return Common::AlignUp((dmem_mb << 20) + 1_GB, 512_MB);
+    }();
+    // One Metal buffer is limited to maxBufferLength, about 60% of the Mac's memory (28 GiB with
+    // 48 GB; ~9 GiB with 16 GB). BB_MAX_BUFFER_GIB pretends a lower limit (testing).
+    u64 max_buffer = device.GetLimits().max_buffer_length;
+    if (const char* env = std::getenv("BB_MAX_BUFFER_GIB")) {
+        max_buffer = std::min<u64>(max_buffer, std::strtoull(env, nullptr, 10) << 30);
+    }
+    const u64 arena_bytes = std::min<u64>(wanted_bytes, max_buffer & ~(256_MB - 1));
+    if (arena_bytes < wanted_bytes) {
+        reason = "the largest Metal buffer";
+    }
+    ASSERT_MSG(arena_bytes >= 5_GB,
+               "This Mac's GPU allows buffers of {:.1f} GiB; the game needs 5 GiB (a Mac with "
+               "at least 16 GB of memory)",
+               double(max_buffer) / double(1_GB));
     u64 memsize = 0;
     size_t memsize_size = sizeof memsize;
     if (sysctlbyname("hw.memsize", &memsize, &memsize_size, nullptr, 0) != 0) {
         memsize = 0;
     }
-    const char* reason = "the default";
-    const u64 wanted_bytes = [&] {
-        if (const char* env = std::getenv("BB_ARENA_MIB")) {
-            reason = "BB_ARENA_MIB";
-            return std::strtoull(env, nullptr, 10) << 20;
-        }
-        if (const char* env = std::getenv("BB_ARENA_GIB")) {
-            reason = "BB_ARENA_GIB";
-            return std::strtoull(env, nullptr, 10) << 30;
-        }
-        u64 bytes = MacArenaPages << ARENA_PAGE_BITS;
-        if (memsize) {
-            const u64 by_memory = std::max<u64>(2, (memsize / 4) >> ARENA_PAGE_BITS)
-                                  << ARENA_PAGE_BITS;
-            if (by_memory < bytes) {
-                bytes = by_memory;
-                reason = "a quarter of the Mac's memory";
-            }
-        }
-        const char* dmem = std::getenv("BB_DMEM_MB");
-        u64 pool_mb = dmem ? std::strtoull(dmem, nullptr, 10) : 0;
-        if (pool_mb < 5056 || pool_mb > 16384) {
-            pool_mb = 5056;
-        }
-        const u64 guest = (pool_mb + 448 + 256) << 20;
-        if (guest < bytes) {
-            bytes = guest;
-            reason = "the guest's direct and flexible memory";
-        }
-        return bytes;
-    }();
-    // One Metal buffer is limited to maxBufferLength, about 60% of the Mac's memory (28 GiB with
-    // 48 GB; ~9 GiB with 16 GB): the full 16 GiB failed to allocate on Macs with less than
-    // ~28 GB ("Failed allocating buffer", buffer.cpp). BB_MAX_BUFFER_GIB pretends a lower limit
-    // (testing).
-    u64 max_buffer = device.GetLimits().max_buffer_length;
-    if (const char* env = std::getenv("BB_MAX_BUFFER_GIB")) {
-        max_buffer = std::min<u64>(max_buffer, std::strtoull(env, nullptr, 10) << 30);
-    }
-    u64 arena_bytes = Common::AlignUp(wanted_bytes, ArenaGranularity);
-    if (arena_bytes > Common::AlignDown(max_buffer, ArenaGranularity)) {
-        arena_bytes = Common::AlignDown(max_buffer, ArenaGranularity);
-        reason = "the largest Metal buffer";
-    }
-    ASSERT_MSG(arena_bytes >= 4_GB || (std::getenv("BB_ARENA_MIB") || std::getenv("BB_ARENA_GIB")),
-               "This Mac's GPU allows buffers of {:.1f} GiB; the game needs 4 GiB (a Mac with "
-               "at least 16 GB of memory)",
-               double(max_buffer) / double(1_GB));
-    std::printf("GPU arena: %.2f GiB (%s; the Mac has %.0f GB of memory, its largest Metal buffer "
+    std::printf("GPU arena: %.1f GiB (%s; the Mac has %.0f GB of memory, its largest Metal buffer "
                 "is %.1f GiB)\n",
                 double(arena_bytes) / double(1_GB), reason, double(memsize) / 1e9,
                 double(max_buffer) / double(1_GB));
     mac_arena_end = MacArenaBase + arena_bytes;
     const auto* arena = &arenas.emplace_back(device, MemoryType::DeviceLocal, MacArenaBase,
                                              arena_bytes, "Guest Arena");
-    // The last page may be only partly covered; GetArena checks requests against mac_arena_end.
-    const u64 arena_pages = Common::AlignUp(arena_bytes, ARENA_PAGE_SIZE) >> ARENA_PAGE_BITS;
-    for (u64 page = 0; page < arena_pages; ++page) {
+    // Every 4 GiB page the arena touches points at it; GetArena checks the end within the last.
+    for (u64 page = 0; page < (arena_bytes + ARENA_PAGE_SIZE - 1) >> ARENA_PAGE_BITS; ++page) {
         address_space[first_page + page] = arena;
     }
     runtime.RegisterHoistTarget(arena, arena_bytes);
@@ -729,6 +711,11 @@ std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, 
     if (offset < IndexOffsetLimit && size <= IndexOffsetLimit - offset) {
         return {buffer, offset};
     }
+    // bbport: with BB_ARENA_WINDOWS=1 the encoder draws through a window of the arena at a low
+    // offset (Metal::LowOffset) instead; off by default (Metal::CanLowerOffsets, #42).
+    if (Metal::CanLowerOffsets(buffer->Ref().buffer)) {
+        return {buffer, offset};
+    }
     // The bytes in the arena are correct, but drawIndexedPrimitives fetches from the
     // wrapped offset (reproduced on M2). Small indices already use the stream buffer;
     // this is why a prop's details can draw while its larger body disappears.
@@ -806,9 +793,9 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     ASSERT_MSG(first_arena && first_arena == last_arena &&
                    ((last_block + 1) << block_shift) <= mac_arena_end,
                "GPU buffer {:#x}..{:#x} outside the macOS guest arena (ends at {:#x}; limited by "
-               "this Mac's largest Metal buffer or BB_ARENA_MIB)",
+               "this Mac's largest Metal buffer)",
                first_block << block_shift, ((last_block + 1) << block_shift) - 1, mac_arena_end);
-    // bbport: how much of the arena the game reaches (BB_ARENA_GIB sizing).
+    // bbport: how much of the arena the game reaches (the arena's sizing).
     const u64 end = ((last_block + 1) << block_shift) - MacArenaBase;
     const u64 steps = (end + (256_MB - 1)) / 256_MB;
     u64 seen = arena_high_steps.load(std::memory_order_relaxed);
@@ -816,7 +803,7 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
            !arena_high_steps.compare_exchange_weak(seen, steps, std::memory_order_relaxed)) {
     }
     if (steps > seen) {
-        std::printf("GPU arena: the game reached %.2f GiB of the %.2f GiB arena\n",
+        std::printf("GPU arena: the game reached %.2f GiB of the %.1f GiB arena\n",
                     double(steps * 256_MB) / double(1_GB),
                     double(mac_arena_end - MacArenaBase) / double(1_GB));
     }

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: Metal::Encoder records the renderer's commands into Metal command buffers (Metal-native
 // renderer, spec component 2). It is the state machine of mtl_frame.mm (metal-backend) with
@@ -105,6 +106,9 @@ public:
 protected:
     ~TimestampSink() = default;
 };
+
+/// bbport: BB_ENCODER_STATS frame boundary (Presenter, at each guest flip).
+void EncoderStatsFrame();
 
 class Encoder {
 public:

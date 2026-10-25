@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
@@ -48,15 +49,6 @@ enum Layout: Equatable {
         return nil
     }
 
-    var hasMetalRenderer: Bool {
-        switch self {
-        case let .packaged(contents):
-            FileManager.default.fileExists(atPath: contents.appendingPathComponent("Resources/port/metal-renderer").path)
-        case let .checkout(repo, _):
-            FileManager.default.fileExists(atPath: repo.appendingPathComponent("gpu/shadps4/video_core/renderer_metal").path)
-        }
-    }
-
     private static func home(_ env: [String: String]) -> URL {
         URL(fileURLWithPath: env["HOME"] ?? NSHomeDirectory())
     }
@@ -89,16 +81,31 @@ enum Layout: Equatable {
         return FileManager.default.fileExists(atPath: game.appendingPathComponent("eboot.bin").path) ? game : nil
     }
 
-    /// scripts/game_check.py with the Python run.sh uses (prints why a folder cannot be used).
-    var gameCheckCommand: [String] {
+    /// The benchmark's save and recorded route (docs/DESIGN_BENCHMARK.md; benchmark/ in git):
+    /// BB_BENCH_ASSETS, else Contents/Resources/benchmark in the release app, benchmark/ in a
+    /// checkout. Benchmark.assetsProblem says whether they are there.
+    func benchmarkAssets(env: [String: String]) -> URL {
+        if let path = env["BB_BENCH_ASSETS"], !path.isEmpty { return URL(fileURLWithPath: path) }
         switch self {
-        case let .packaged(contents):
-            [contents.appendingPathComponent("Resources/python/bin/python3").path,
-             contents.appendingPathComponent("Resources/port/scripts/game_check.py").path]
-        case let .checkout(repo, _):
-            ["/usr/bin/env", "python3", repo.appendingPathComponent("scripts/game_check.py").path]
+        case let .packaged(contents): return contents.appendingPathComponent("Resources/benchmark")
+        case let .checkout(repo, _): return repo.appendingPathComponent("benchmark")
         }
     }
+
+    /// A command running one of the port's Python scripts (`scripts/<script>`): the bundled
+    /// Python in the release app, the system's in a checkout. -B: no bytecode inside the signed
+    /// app bundle.
+    func pythonCommand(script: String) -> [String] {
+        switch self {
+        case let .packaged(contents):
+            [contents.appendingPathComponent("Resources/python/bin/python3").path, "-B",
+             contents.appendingPathComponent("Resources/port/scripts/\(script)").path]
+        case let .checkout(repo, _):
+            ["/usr/bin/env", "python3", "-B", repo.appendingPathComponent("scripts/\(script)").path]
+        }
+    }
+
+    var gameCheckCommand: [String] { pythonCommand(script: "game_check.py") }
 
     /// The environment the earlier bash launchers set (release app, checkout app), plus the save
     /// folder. Display settings reach the game through
@@ -106,6 +113,8 @@ enum Layout: Equatable {
     func launchPlan(gameDir: URL, saveDir: URL?, dataDir: URL, env: [String: String]) -> LaunchPlan {
         var environment = env
         environment["BB_GAME_DIR"] = gameDir.path
+        // The in-game menu's "Show the launcher" toggle writes BB_SHOW_LAUNCHER there.
+        environment["BB_LAUNCH_CONF"] = launchConfURL(env: env).path
         if let saveDir {
             environment["BB_SAVE_DIR"] = saveDir.path
         } else {
@@ -120,7 +129,6 @@ enum Layout: Equatable {
             environment["BB_PROBE"] = contents.appendingPathComponent("MacOS/bb-probe").path
             environment["PYTHON"] = contents.appendingPathComponent("Resources/python/bin/python3").path
             environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            environment["VK_DRIVER_FILES"] = port.appendingPathComponent("MoltenVK_icd.json").path
             return LaunchPlan(executable: bash, arguments: [port.appendingPathComponent("run.sh").path],
                               environment: environment, directory: port)
         case let .checkout(repo, app):

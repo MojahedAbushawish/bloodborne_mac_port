@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: user settings changed at run time from the in-game menu (bbport_overlay.h) and kept
 // in bbport.ini (BB_CONFIG overrides the path). Environment variables override the file at
@@ -6,6 +7,7 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 
 /// Keyboard shortcut that opens the in-game menu (log lines and the ini header; ASCII).
 /// Mac keyboards have no Insert key, so macOS uses the Settings convention Cmd+,.
@@ -75,25 +77,26 @@ struct Values {
     /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
     std::atomic<bool> frame_pacing{false};
     /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
-    std::atomic<bool> mouse_look{true};
+    /// Off by default: on, the first left click in the window captures the cursor, for gamepad
+    /// players too. Players turn it on in the menu (Display > Mouse camera).
+    std::atomic<bool> mouse_look{false};
     std::atomic<float> mouse_sensitivity{1.0f};
     std::atomic<bool> mouse_invert_y{false};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
+    // Fixed at launch: native scene/UI patch dimensions, requiring a restart.
+    int ultrawide_width = 0, ultrawide_height = 0;
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};
     std::atomic<int> model_lod{0}; ///< -2 highest .. 2 lowest, 0 the game's
     std::atomic<int> output_res{OutputDefault}; ///< index into OutputWidths
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
-    /// on the Steam Deck and older GPUs), -1 auto (strong discrete GPUs), 1 on. On restart.
+    /// on the Steam Deck and older GPUs), -1 auto (off on a Mac), 1 on. On restart.
     std::atomic<int> live_resolution{0};
     /// A draw whose pipeline is still compiling in the background: Wait waits for it (a hitch,
     /// correct image), Skip leaves the draw out until it is ready (no hitch, an object may be
     /// missing for a few frames), Balanced waits within a small time budget and skips past it.
     /// bbport.ini shader_compile=wait|skip|balanced; live.
     std::atomic<int> shader_compile{ShaderBalanced};
-    /// bbport.ini renderer=metal|vulkan, read by run.sh at start (native Metal: the arm64 GPU
-    /// process); kept here so saving the settings does not drop it.
-    std::atomic<bool> metal_renderer{false};
     /// Providers this build and device can run (ConfigureUpscalerSupport); off and TAA always.
     std::atomic<bool> metalfx_supported{false}; ///< macOS: Apple MetalFX temporal scaler
     std::atomic<bool> fsr3_supported{false};    ///< FSR 3.1: Apple7+ (shim/ffx_metal)
@@ -113,6 +116,8 @@ struct Values {
 };
 
 Values& Get();
+/// Output dimensions actually selected for this session, including native ultrawide.
+std::array<int, 2> OutputSize();
 
 /// Reads the file, then the environment overrides. Called once at start.
 void Load();
@@ -133,6 +138,12 @@ int RenderPreset();
 bool ResolutionNeedsRestart();
 /// Writes the file (menu changes).
 void Save();
+
+/// The launcher's "show every time" choice in launch.conf (BB_LAUNCH_CONF, set by the launcher):
+/// 1 or 0, or -1 when the launcher did not start the game. Read once, then cached.
+int ShowLauncher();
+/// Rewrites BB_SHOW_LAUNCHER in launch.conf; every other line is kept.
+void SetShowLauncher(bool show);
 
 /// Render resolution divisor of a preset (1.0 native, 1.5 quality, ...).
 float PresetScale(int preset);

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the Metal pipeline states of the game's pipelines (mtl_pipeline_build.h). Moved from
 // the M1 shadow builder (mtl_shadow.mm Graphics/Compute), which followed Huax-1839's
@@ -221,7 +222,10 @@ GraphicsPsos PipelineFactory::TessellationPsos(const Vulkan::GraphicsPipelineKey
     if (ok) {
         input.control = Variant(*tcs_module, {.kind = Kind::TessControl, .domain = tes_info.domain});
         input.eval = Variant(*tes_module,
-                             {.kind = Kind::TessEval, .output_vertices = tcs_info.output_vertices});
+                             {.kind = Kind::TessEval,
+                              .output_vertices = tcs_info.output_vertices,
+                              .patch_first = tcs_info.patch_first,
+                              .patch_end = tcs_info.patch_end});
         ok = input.control && input.eval;
     }
     if (!ok) {

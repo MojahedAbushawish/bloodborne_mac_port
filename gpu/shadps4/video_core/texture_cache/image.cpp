@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "bbport_toggles.h"
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <mutex>
 #include <vector>
 #include "common/assert.h"
@@ -24,7 +26,11 @@ Common::IncrementalIdProvider<u64> Image::global_image_uid{};
 bool LazyTextureUsage() {
     static const bool on = [] {
         const char* env = std::getenv("BB_LAZY_TEXTURE_USAGE");
-        return !(env && env[0] == '0');
+        const bool lazy = !(env && env[0] == '0');
+        // bbport: in the log for reports (launcher: Advanced → Texture compression).
+        std::printf("Textures: lossless compression %s\n",
+                    lazy ? "on" : "off (BB_LAZY_TEXTURE_USAGE=0)");
+        return lazy;
     }();
     return on;
 }

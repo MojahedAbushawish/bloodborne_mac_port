@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -339,8 +340,25 @@ private:
         std::atomic<bool> built{false};
         std::atomic<const Metal::RenderPipeline*> render{nullptr};
     };
-    /// By the pipeline and the variant key's hash (recording thread).
-    std::unordered_map<u64, std::shared_ptr<PassVariant>> pass_variants;
+    /// A variant's identity: the pipeline and the full variant key, compared on lookup (a hash
+    /// collision would otherwise draw with another variant's attachment formats).
+    struct PassVariantKey {
+        const GraphicsPipeline* pipeline;
+        GraphicsPipelineKey key;
+        bool operator==(const PassVariantKey& other) const noexcept {
+            return pipeline == other.pipeline && key == other.key;
+        }
+    };
+    struct PassVariantKeyHash {
+        size_t operator()(const PassVariantKey& k) const noexcept {
+            const size_t h = std::hash<GraphicsPipelineKey>{}(k.key);
+            return h ^ (std::hash<const void*>{}(k.pipeline) + 0x9e3779b97f4a7c15ull + (h << 6) +
+                        (h >> 2));
+        }
+    };
+    /// Recording thread.
+    std::unordered_map<PassVariantKey, std::shared_ptr<PassVariant>, PassVariantKeyHash>
+        pass_variants;
     /// bbport: obtains the draw's vertex streams (vertex_binds) and index buffer (index_bind);
     /// the draw binds them in its recorded command (bindings do not survive a submission).
     void ResolveVertexBuffers(const GraphicsPipeline* pipeline,

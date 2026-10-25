@@ -1,14 +1,20 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 import AppKit
+import Combine
 import Foundation
 
 /// The launcher window's state and actions.
 @MainActor
 final class LauncherModel: ObservableObject {
     let layout: Layout
+    let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
+    let benchmark = BenchmarkRunner()
     private let env = ProcessInfo.processInfo.environment
     private var confFile = IniFile()
     private var settingsFile = IniFile()
+    private var updaterChanges: AnyCancellable?
+    private var benchmarkChanges: AnyCancellable?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -18,6 +24,19 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var saveProblem: String?
     @Published private(set) var running = false
     @Published private(set) var exitMessage: String?
+    /// The last session's crash report (the game stopped with an error), shown as a sheet.
+    @Published private(set) var crashReport: CrashReport?
+    @Published var showingCrashReport = false
+    /// The diagnostics zip of the last crash (CrashBundle), once written.
+    @Published private(set) var crashBundle: URL?
+    @Published private(set) var preparingCrashBundle = false
+    /// The running or last session's text log (SessionLog).
+    @Published private(set) var sessionLog: URL?
+    private var sessionStart: Date?
+    /// Why the Benchmark button can't run (no assets in this build), else nil.
+    @Published private(set) var benchmarkProblem: String?
+    /// The mod folders the next launch loads (mods.json), for the footer's summary.
+    @Published private(set) var enabledMods: [String] = []
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -25,12 +44,24 @@ final class LauncherModel: ObservableObject {
     init(layout: Layout) {
         self.layout = layout
         dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
+        // The window's update sheet follows the updater.
+        updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        benchmarkChanges = benchmark.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
     var confURL: URL { layout.launchConfURL(env: env) }
     var settingsURL: URL { URL(fileURLWithPath: env["BB_CONFIG"] ?? dataDir.appendingPathComponent("bbport.ini").path) }
-    var logURL: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())).appendingPathComponent("game.log") }
+    var logsFolder: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())) }
+    /// This launch's session log, else the newest one (game.log links to it).
+    var logURL: URL { sessionLog ?? logsFolder.appendingPathComponent(SessionLog.latestName).resolvingSymlinksInPath() }
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return info["CFBundleVersion"] as? String ?? info["CFBundleShortVersionString"] as? String ?? "development build"
+    }
     var saveDir: URL { config.saveDir ?? SaveFolder.defaultURL(dataDir: dataDir) }
+    var modFiles: ModFiles { ModFiles(dataDir: dataDir, env: env) }
+    /// "2 mods · 1 cheat on" next to the Mods & Cheats… button.
+    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count) }
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
     }
@@ -56,12 +87,27 @@ final class LauncherModel: ObservableObject {
         let exists = FileManager.default.fileExists(atPath: settingsURL.path)
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
         settings = GameSettings(ini: settingsFile)
+        benchmarkProblem = Benchmark.assetsProblem(layout.benchmarkAssets(env: env))
+        refreshEnabledMods()
         checkGame()
+    }
+
+    func refreshEnabledMods() {
+        let files = modFiles
+        enabledMods = ModsConfig.enabledMods(modsDir: files.mods, config: files.modsConfig)
+    }
+
+    /// The Cheats & Tweaks tab: bbport.ini at once (not while the game runs: its menu writes the
+    /// file too, and the launcher reads it again when the game ends).
+    func setCheat(_ name: String, on: Bool, cheats: [CheatInfo]) {
+        guard !running else { return }
+        settings.cheats = Cheats.toggle(name, on: on, in: settings.cheats, cheats: cheats)
+        save()
     }
 
     func save() {
         config.apply(to: &confFile)
-        settings.apply(to: &settingsFile, includeRenderer: layout.hasMetalRenderer)
+        settings.apply(to: &settingsFile)
         do {
             try confFile.write(to: confURL)
             try settingsFile.write(to: settingsURL)
@@ -73,6 +119,7 @@ final class LauncherModel: ObservableObject {
     func checkGame() {
         guard let folder = config.gameDir else {
             gameProblem = "Choose the game folder (CUSA03173 with update 1.09, the folder containing eboot.bin)."
+            NSApplication.shared.applicationIconImage = nil
             return
         }
         checkingGame = true
@@ -83,9 +130,21 @@ final class LauncherModel: ObservableObject {
                 if self.config.gameDir == folder {
                     self.gameProblem = problem
                     self.checkingGame = false
+                    if problem == nil {
+                        self.applyGameIcon(from: folder)
+                    } else {
+                        NSApplication.shared.applicationIconImage = nil
+                    }
                 }
             }
         }
+    }
+
+    private func applyGameIcon(from folder: URL) {
+        let iconURL = folder.appendingPathComponent("sce_sys/icon0.png")
+        guard FileManager.default.fileExists(atPath: iconURL.path),
+              let iconImage = NSImage(contentsOf: iconURL) else { return }
+        NSApplication.shared.applicationIconImage = iconImage
     }
 
     private func pickFolder(_ message: String, start: URL?) -> URL? {
@@ -173,9 +232,15 @@ final class LauncherModel: ObservableObject {
             config.saveDir = nil
             save()
         }
+        guard backUpSavesIfNeeded() else { onExit?(-1); return }
         let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir, env: env)
         do {
-            _ = try GameRunner.start(plan, log: logURL) { [weak self] status in self?.finished(status) }
+            let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
+            log.note("Bloodborne for Mac \(appVersion) on \(SystemInfo.current(appVersion: appVersion).line); "
+                     + "\(settingsSummary.joined(separator: ", ")); game folder \(game.path)")
+            _ = try GameRunner.start(plan, log: log) { [weak self] status in self?.finished(status) }
+            sessionLog = log.text
+            sessionStart = log.start
             running = true
             exitMessage = nil
             onStarted?()
@@ -185,16 +250,204 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    /// The Benchmark button: two game launches with the benchmark's own save and settings
+    /// (docs/DESIGN_BENCHMARK.md); the results sheet opens when they are done. `confirm` false:
+    /// started by `--benchmark` (scripted comparisons), no question first.
+    func startBenchmark(confirm: Bool = true) {
+        guard !running, let game = config.gameDir else { return }
+        if let benchmarkProblem {
+            let alert = NSAlert()
+            alert.messageText = "The benchmark is not available"
+            alert.informativeText = benchmarkProblem
+            alert.runModal()
+            return
+        }
+        save()
+        if GameRunner.isGameRunning {
+            exitMessage = "Bloodborne is already running. Quit the game before starting the benchmark."
+            return
+        }
+        if !GameRunner.hasRosetta {
+            exitMessage = "The game needs Rosetta 2: press Play once to install it."
+            return
+        }
+        if confirm {
+            let alert = NSAlert()
+            alert.messageText = "Run the benchmark?"
+            alert.informativeText = "The game starts twice, about 6 minutes in all: a recorded walk through Central Yharnam, then 30 seconds standing still without a frame cap. Don't touch the game window, the keyboard or a controller while it runs: the walk is replayed, and any input would change it.\n\nThe benchmark uses its own save and fixed settings (1920 × 1080, upscaler off, windowed). Your saves and settings are not changed. The results open here when it's done."
+            alert.addButton(withTitle: "Start Benchmark")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        let job = BenchmarkRunner.Job(layout: layout, gameDir: game, dataDir: dataDir, env: env,
+                                      assets: layout.benchmarkAssets(env: env))
+        do {
+            try benchmark.start(job, home: URL(fileURLWithPath: NSHomeDirectory()), started: { [weak self] in
+                self?.running = true
+                self?.exitMessage = nil
+                self?.onStarted?()
+            }, done: { [weak self] in
+                guard let self else { return }
+                self.running = false
+                self.load()
+                self.onExit?(0)
+            })
+        } catch {
+            exitMessage = "The benchmark could not start: \(error.localizedDescription)"
+        }
+    }
+
+    /// Mods and cheats can change what ends up in the save: the first launch with a set not seen
+    /// before copies the save folder to <data>/save-backups/<date>/savedata (the newest five
+    /// stay). False: the copy failed and the player cancelled.
+    private func backUpSavesIfNeeded() -> Bool {
+        refreshEnabledMods()
+        let backups = modFiles.backups
+        let signature = ModSignature(mods: enabledMods, cheats: settings.cheats)
+        guard SaveBackup.needed(signature, last: SaveBackup.lastSignature(backups: backups)) else { return true }
+        do {
+            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, signature: signature)
+            return true
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Your save could not be backed up"
+            alert.informativeText = "The launcher backs up your save before the first launch with a new set of mods or cheats, and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
+            alert.addButton(withTitle: "Play Anyway")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+    }
+
     private func finished(_ status: Int32) {
         running = false
         load()
-        exitMessage = status == 0 ? nil : "Bloodborne stopped (status \(status))."
+        if status == 0 {
+            exitMessage = nil
+            crashReport = nil
+        } else {
+            let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+            let (logName, system, settings, ended) = (logURL.lastPathComponent, SystemInfo.current(appVersion: appVersion),
+                                                      settingsSummary, Date())
+            let started = sessionStart
+            let makeReport: @Sendable ([NativeCrash]) -> CrashReport = { natives in
+                CrashReport(status: status, log: log, logName: logName, system: system, settings: settings,
+                            home: NSHomeDirectory(), started: started, ended: ended, natives: natives)
+            }
+            let report = makeReport([])
+            crashReport = report
+            crashBundle = nil
+            exitMessage = report.summary
+            showingCrashReport = true
+            prepareCrashBundle(report: report, status: status, makeReport: makeReport)
+        }
         onExit?(status)
     }
 
-    func showLog() {
-        GameRunner.run(["/usr/bin/open", "-a", "Console", logURL.path])
+    /// In the background: macOS's crash reports of the session (into the report), then the zip.
+    private func prepareCrashBundle(report: CrashReport, status: Int32, makeReport: @escaping @Sendable ([NativeCrash]) -> CrashReport) {
+        preparingCrashBundle = true
+        let start = sessionStart ?? Date().addingTimeInterval(-3600)
+        let looksLikeCrash = (status > 128 && status < 160) || report.cause.map {
+            $0.localizedCaseInsensitiveContains("signal") || $0.localizedCaseInsensitiveContains("crash")
+        } == true
+        let name = "crash-" + (sessionLog?.deletingPathExtension().lastPathComponent ?? SessionLog.name(start: start))
+            .replacingOccurrences(of: "game-", with: "")
+        let (logs, sessionLog, settings, conf) = (logsFolder, sessionLog, settingsURL, confURL)
+        Task.detached {
+            let native = CrashBundle.nativeCrashes(since: start, expectOne: looksLikeCrash)
+            let full = native.crashes.isEmpty ? report : makeReport(native.crashes)
+            let zip = try? CrashBundle.write(report: full, name: name, logs: logs, sessionLog: sessionLog,
+                                             ipsFiles: native.files, settings: settings, launchConf: conf)
+            await MainActor.run {
+                // (Unless another session ended meanwhile.)
+                guard self.crashReport?.report == report.report else { return }
+                self.crashReport = full
+                self.crashBundle = zip
+                self.preparingCrashBundle = false
+            }
+        }
     }
+
+    /// The settings most likely to matter in a crash report.
+    private var settingsSummary: [String] {
+        var items = ["output \(settings.output.iniValue)", "upscaler \(settings.upscaler.rawValue)"]
+        if settings.upscaler.usesPreset { items.append("quality \(Resolution.presetNames[settings.preset])") }
+        items += ["cap \(settings.frameCap.rawValue) FPS", "\(settings.frameCap.hasFixedSteps ? settings.gameTiming.rawValue : "variable") timing", settings.fullscreen ? "full screen" : "windowed"]
+        return items
+    }
+
+    func showLog() {
+        GameRunner.run(["/usr/bin/open", "-R", logURL.path])
+    }
+
+    func copyCrashReport() {
+        guard let crashReport else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(crashReport.report, forType: .string)
+    }
+
+    /// Opens a new GitHub issue with the report filled in (copied too, for when it is too long for
+    /// the link) and shows the diagnostics zip in Finder, to drag onto the issue.
+    func reportOnGitHub() {
+        guard let crashReport else { return }
+        copyCrashReport()
+        let link = crashReport.issueLink(bundle: crashBundle?.lastPathComponent)
+        if let crashBundle { showCrashBundle(crashBundle) }
+        NSWorkspace.shared.open(link.url)
+    }
+
+    func showCrashBundle(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// One check a day, silent unless it finds an update: when the launcher window shows, or as
+    /// the game starts when the window is turned off (main.swift shows the result after the game).
+    func checkForUpdatesIfDue() {
+        guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
+        config.lastUpdateCheck = Date()
+        save()
+        Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: config.skippedVersion, manual: false) }
+    }
+
+    /// Automatic checks are off until the player agrees: asked once, at the first start with the
+    /// updater, before the launcher window or the game (also when the window is turned off).
+    func askAboutUpdatesIfNeeded() {
+        guard config.checkUpdates == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Check for updates automatically?"
+        alert.informativeText = "Bloodborne can look for a new version of this port on its GitHub releases page once a day, when the launcher opens. Nothing is downloaded or installed without asking you. You can change this in the update window (Bloodborne → Check for Updates…), which works either way."
+        alert.addButton(withTitle: "Check Automatically")
+        alert.addButton(withTitle: "Don't Check")
+        NSApp.activate()
+        config.checkUpdates = alert.runModal() == .alertFirstButtonReturn
+        save()
+    }
+
+    /// The app menu's Check for Updates….
+    func checkForUpdatesNow() {
+        Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: nil, manual: true) }
+    }
+
+    func installUpdate() {
+        guard let update = updater.available, !running else { return }
+        save()
+        Task { await updater.install(update, layout: layout, bundle: Bundle.main.bundleURL) }
+    }
+
+    func skipUpdate() {
+        config.skippedVersion = updater.available?.version.text
+        save()
+        updater.dismiss()
+    }
+
+    /// The update window's checkboxes: saved at once (launch.conf is read again after a game).
+    func setUpdatePreference(automatic: Bool? = nil, testBuilds: Bool? = nil) {
+        if let automatic { config.checkUpdates = automatic }
+        if let testBuilds { config.testBuilds = testBuilds }
+        save()
+    }
+
+    var updateInstallProblem: String? { Updates.installProblem(layout: layout, bundle: Bundle.main.bundleURL) }
 
     func effect(_ key: String) -> Bool { settings.effects[key] ?? false }
     func setEffect(_ key: String, _ on: Bool) { settings.effects[key] = on }

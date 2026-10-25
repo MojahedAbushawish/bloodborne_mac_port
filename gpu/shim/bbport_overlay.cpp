@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 #define IMGUI_DEFINE_MATH_OPERATORS // ImVec2 arithmetic for the custom-drawn controls
 #include "bbport_overlay.h"
@@ -571,7 +572,20 @@ void SliderRow(const char* label, std::atomic<float>& value, float lo, float hi,
     float v = value;
     char id[64];
     std::snprintf(id, sizeof(id), "##%s", label);
-    Store(value, v, ImGui::SliderFloat(id, &v, lo, hi, "%.2f"));
+    bool changed = ImGui::SliderFloat(id, &v, lo, hi, "%.2f");
+    // D-pad left/right step the focused slider: ImGui's own gamepad tweak needs Cross first and
+    // moves 0.01 a press (200 presses across the sharpness range).
+    if (ImGui::IsItemFocused() && !ImGui::IsItemActive()) {
+        const float step = (hi - lo) / 40.0f;
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) {
+            v = std::max(lo, v - step);
+            changed = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) {
+            v = std::min(hi, v + step);
+            changed = true;
+        }
+    }
+    Store(value, v, changed);
 }
 
 /// Label on the left, read-only value on the right.
@@ -629,6 +643,15 @@ int current_tab = TabDisplay;
 std::atomic<bool> gamepad_in_use{false}; // last menu input came from a pad: show L1/R1 hints
 
 void DisplayTab(BbSettings::Values& s) {
+    const char* wide = std::getenv("BB_ULTRAWIDE_RES");
+    const bool native_wide = wide && wide[0];
+    if (native_wide) {
+        BeginCard("Native ultrawide / 16:10");
+        ValueRow("Resolution", wide);
+        Note("Change resolution in the launcher and restart. Upscaling is off.");
+        EndCard();
+    }
+    ImGui::BeginDisabled(native_wide);
     // The menu's choices (FSR 4 is removed from the Mac build; an ini naming it still loads).
     static constexpr int choices[] = {BbSettings::UpscalerOff, BbSettings::UpscalerFsr3,
                                       BbSettings::UpscalerTaa, BbSettings::UpscalerMetalFx};
@@ -788,6 +811,8 @@ void DisplayTab(BbSettings::Values& s) {
     HintBelow("Size of the final frame and HUD.");
     EndCard();
 
+    ImGui::EndDisabled(); // wide camera/output selection is fixed until restart
+
     BeginCard("Frame pacing");
     Toggle("Even frame times", s.frame_pacing);
     HintBelow("Shows each frame for one period of the FPS cap. Smoother camera motion on "
@@ -798,6 +823,17 @@ void DisplayTab(BbSettings::Values& s) {
     BeginCard("Overlay");
     Toggle("FPS counter in corner", s.show_fps);
     EndCard();
+
+    // Started by the launcher: its "show every time" switch, which is hard to find again once off.
+    if (const int shown = BbSettings::ShowLauncher(); shown >= 0) {
+        BeginCard("Launcher");
+        bool v = shown != 0;
+        if (ToggleRow("Show the launcher when Bloodborne opens", &v)) {
+            BbSettings::SetShowLauncher(v);
+        }
+        HintBelow("Holding \xE2\x8C\xA5 Option while opening Bloodborne shows it once.");
+        EndCard();
+    }
 
     BeginCard("Mouse");
     Toggle("Mouse camera", s.mouse_look);
@@ -1168,17 +1204,18 @@ void FpsCounter() {
     ImGui::Text("%.0f FPS", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f);
     ImGui::SameLine();
     ImGui::TextColored(kSecondary, "%.1f ms", frame_ms_avg);
-    // Scene (render) size as reported by the upscaler, and the output size in effect: a
+    // Scene size from the upscaler or native G-buffer, and the output in effect: a
     // startup-patched session keeps its launch output until restart.
     const char* upscaler = s.upscaler == BbSettings::UpscalerFsr3      ? "FSR 3.1"
                            : s.upscaler == BbSettings::UpscalerTaa     ? "TAA"
                            : s.upscaler == BbSettings::UpscalerMetalFx ? "MetalFX"
                                                                        : "";
-    const int output = BbSettings::FixedRenderSession() ? s.startup_output_res : s.output_res.load();
-    const int out_w = BbSettings::OutputWidths[output], out_h = BbSettings::OutputHeights[output];
+    const auto [out_w, out_h] = BbSettings::OutputSize();
     const int render_w = s.active_render_width, render_h = s.active_render_height;
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.82f);
-    if (render_w == out_w && render_h == out_h) {
+    if (!render_w || !render_h) {
+        ImGui::TextColored(kSecondary, "%dx%d output", out_w, out_h);
+    } else if (render_w == out_w && render_h == out_h) {
         ImGui::TextColored(kSecondary, "%dx%d  %s", out_w, out_h, upscaler);
     } else {
         ImGui::TextColored(kSecondary, "%dx%d \xE2\x86\x92 %dx%d  %s", render_w, render_h, out_w,

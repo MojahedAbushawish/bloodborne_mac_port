@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -222,6 +223,10 @@ private:
     /// bbport: the last LoadPipelineStage refused a stored permutation that conflicts with this
     /// session's bindings or permutation indices (LoadStored counts them apart).
     bool load_conflict = false;
+    /// bbport: the last LoadPipelineStage refused a stored shader of an older meta version
+    /// (another BB_SPIRV_PRECISE mode or an earlier build): an older cache format, migrated by
+    /// clearing once like old pipeline keys.
+    bool load_old_meta = false;
 };
 
 } // namespace Vulkan

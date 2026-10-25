@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: from Huax-1839/bloodborne-macos (ee3120a, GPL-2.0-or-later), renderer_metal/.
 
@@ -229,11 +230,12 @@ public:
 
     /// The binary archive is written by the cache's own writer thread (never a pipeline build or
     /// the recording thread): once pipelines were compiled since the last write, it waits until
-    /// 10 s after the last write (or the cache's creation), then writes everything pending. A
+    /// 10 s after the last write (or the cache's creation), and at least 20 times as long as
+    /// the last write took (mtl_pso_cache.mm kWriteSpacing), then writes everything pending. A
     /// write is a fresh archive of every pipeline this session created or took from the archive
     /// (Metal cannot serialize one archive again after additions that reuse its functions),
     /// atomically (temp file + rename); pipelines of the old file this session never used are
-    /// left out. A crash loses at most the last ~10 s of compiled pipelines (plus the write in
+    /// left out. A crash loses the pipelines compiled since the last write (plus the write in
     /// flight).
     ///
     /// Flush: waits for a write in flight, then writes now if pipelines are pending. False when

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: temporal upscaling of Bloodborne's scene color (docs/upscaler.md), on Metal.
 //
@@ -17,10 +18,6 @@
 // The resolve step is pluggable (Resolve): TAA, MetalFX and FSR 3.1 plug in there.
 
 #pragma once
-
-#ifndef BB_METAL_NATIVE_STAGE
-#error "BB_METAL_NATIVE_STAGE must be defined (gpu/CMakeLists.txt: target_compile_definitions)"
-#endif
 
 #include <array>
 #include <atomic>

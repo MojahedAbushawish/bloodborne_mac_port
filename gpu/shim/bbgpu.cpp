@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #include "bbport_write_log.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
@@ -11,6 +12,7 @@
 #include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
 #include "video_core/renderdoc.h"
+#include <cstdio>
 #include <cstring>
 #include <unistd.h>
 #include <memory>
@@ -242,26 +244,6 @@ static void OpenWindow(const BbGpuConfig* config);
 
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
-#ifdef __APPLE__
-    // MoltenVK encodes Metal commands while our recorder thread records them, instead of all at
-    // once inside the flip's vkQueueSubmit (~13 ms per frame on the M4 Max): the flip and the
-    // game's fences no longer wait behind it, and late game frames (judder) drop ~6x (FINDINGS
-    // "Judder: the flip submit"). Not with MetalFX: its own Metal command buffer then queues
-    // behind the next frame's prefilled one (late frames went up 7x). Decided at start (before
-    // MoltenVK reads its configuration); the environment overrides (0 = encode at submit).
-    if (BbSettings::Get().upscaler != BbSettings::UpscalerMetalFx) {
-        setenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS", "2", 0);
-    }
-    if (const char* prefill = std::getenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS")) {
-        std::printf("MoltenVK: prefilled command buffers %s\n", prefill);
-    }
-    // Push descriptors bound directly instead of through Metal argument buffers: +13-16% FPS
-    // uncapped at 1080p/1440p, native, FSR and MetalFX, same pacing at 60 (FINDINGS "argument
-    // buffers"; the tip came from Huax-1839/bloodborne-macos). The environment overrides.
-    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
-    std::printf("MoltenVK: Metal argument buffers %s\n",
-                std::getenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS"));
-#endif
 #ifdef BB_PGO_GENERATE
     StartProfileWriter();
 #endif
@@ -424,6 +406,26 @@ extern "C" const bool* bbgpu_split_keyboard(void) {
     }
     static_assert(sizeof(bool) == 1);
     return reinterpret_cast<const bool*>(BbSplit::Shared()->keys);
+}
+
+extern "C" uint32_t bbgpu_bench_frame_draws(void) {
+    return BbSplit::Remote() ? __atomic_load_n(&BbSplit::Shared()->bench_frame_draws, __ATOMIC_RELAXED)
+                             : 0;
+}
+
+extern "C" uint64_t bbgpu_bench_host_flips(void) {
+    return BbSplit::Remote() ? __atomic_load_n(&BbSplit::Shared()->host_flips, __ATOMIC_RELAXED) : 0;
+}
+
+extern "C" void bbgpu_bench_set_phase(uint32_t phase, const char* error) {
+    if (!BbSplit::Remote()) {
+        return;
+    }
+    BbGpuShared* s = BbSplit::Shared();
+    if (error) {
+        std::snprintf(s->bench_error, sizeof(s->bench_error), "%s", error);
+    }
+    __atomic_store_n(&s->bench_phase, phase, __ATOMIC_RELEASE);
 }
 
 extern "C" void bbgpu_split_push(const void* record) {

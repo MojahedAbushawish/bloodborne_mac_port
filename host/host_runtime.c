@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* bbgpu-host: the runtime_* functions the GPU library (gpu/, built arm64) imports from bb-probe
  * in a single process, provided here from the mirrored guest view table (M3, design "M3 plan").
  * Guest memory is mapped at the runtime's addresses and always read/write here: the game's page
@@ -234,6 +235,8 @@ void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char 
     *total_ns = *busiest_ns = 0;
     busiest_name[0] = 0;
 }
+
+void runtime_sampler_flip(uint64_t main_cpu_ns) { (void)main_cpu_ns; } /* game side only */
 
 int runtime_memory_read_backing(uintptr_t address, void *out, uint64_t size) {
     if (!host_view_covered(address, address + size)) return 0;

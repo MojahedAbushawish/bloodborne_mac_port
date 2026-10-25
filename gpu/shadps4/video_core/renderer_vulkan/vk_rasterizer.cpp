@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <mutex>
@@ -404,7 +405,19 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
     // bbport: the G-buffer pass (5+ color targets) holds the scene depth, and its constants the
     // main camera (shadow passes bind the same layout with the light's camera).
-    gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    const bool scene_gbuffer = std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    if (scene_gbuffer && !upscaler->Enabled() && BbSettings::Get().ultrawide_width) {
+        const auto& size = texture_cache.GetImage(db_desc.first).info.size;
+        auto& settings = BbSettings::Get();
+        if (settings.active_render_width != int(size.width) ||
+            settings.active_render_height != int(size.height)) {
+            settings.active_render_width = size.width;
+            settings.active_render_height = size.height;
+            std::printf("Native ultrawide: observed scene depth %ux%u (no host scaling)\n",
+                        size.width, size.height);
+        }
+    }
+    gbuffer_draw = camera_motion->Enabled() && scene_gbuffer;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
     }
@@ -3862,9 +3875,7 @@ const Metal::RenderPipeline* Rasterizer::MergeIntoOpenPass(const GraphicsPipelin
     if (open->has_stencil && !state.has_stencil) {
         pass_key.stencil_format = open_pass.stencil_format;
     }
-    const u64 hash = XXH3_64bits_withSeed(&pass_key, sizeof(pass_key),
-                                          reinterpret_cast<uintptr_t>(pipeline));
-    auto& variant = pass_variants[hash];
+    auto& variant = pass_variants[PassVariantKey{pipeline, pass_key}];
     if (!variant) {
         variant = std::make_shared<PassVariant>();
         BbStats::pass_variants.fetch_add(1, std::memory_order_relaxed);
@@ -3972,6 +3983,7 @@ void Rasterizer::NoteFrameStart() {
         profiler->BeginFrame();
     }
     const u64 frame = BbStats::gpu_frames.fetch_add(1, std::memory_order_relaxed) + 1;
+    Metal::EncoderStatsFrame(); // BB_ENCODER_STATS
     // BB_BUFFER_STATS=1: how many earlier frames the GPU has not finished when the GPU thread
     // starts a frame — the lag that decides whether guest memory can be read in place.
     static const bool stats = [] {

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -19,8 +20,11 @@ int PreciseMode();
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 8u; // bbport: Metal shader profile (native Metal)
-static constexpr u32 ShaderMetaVersionBase = 10u; // bbport: invariant positions in VS
-// bbport: cached SPIR-V depends on BB_SPIRV_PRECISE, which the keys do not record.
+// bbport: 9 no NoContraction in FS/CS; 10 GCN legacy/clamped float ops (0 * Inf = 0, Inf
+// clamped to FLT_MAX) and NaN/Inf tests on the bit pattern, so a stored cache is rebuilt once.
+static constexpr u32 ShaderMetaVersionBase = 11u;
+// bbport: cached SPIR-V depends on BB_SPIRV_PRECISE, which the keys do not record (mode 0,
+// "vertex", keeps the base version; the invariant default since 0.5.4 adds the mode).
 static u32 ShaderMetaVersion() {
     return ShaderMetaVersionBase | (u32(Shader::Backend::SPIRV::PreciseMode()) << 8);
 }
@@ -108,12 +112,14 @@ void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx)
 
 bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
                     std::optional<Shader::Gcn::FetchShaderData>& fetch_shader_data,
-                    Shader::StageSpecialization& spec, size_t& perm_idx, bool legacy) {
+                    Shader::StageSpecialization& spec, size_t& perm_idx, bool legacy,
+                    bool& old_meta) {
     Serialization::Reader meta{ar};
 
     u32 meta_version{};
     meta.Read(meta_version);
     if (meta_version != Serialization::ShaderMetaVersion()) {
+        old_meta = true;
         return false;
     }
 
@@ -326,7 +332,8 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage,
     Shader::StageSpecialization spec{};
     spec.info = &program->info;
     size_t perm_idx{};
-    if (!LoadShaderMeta(ar, program->info, sel.fetch_shader, spec, perm_idx, loading_legacy)) {
+    if (!LoadShaderMeta(ar, program->info, sel.fetch_shader, spec, perm_idx, loading_legacy,
+                        load_old_meta)) {
         return false;
     }
     // bbport: a permutation's SPIR-V numbers its resources from the bindings of the stages before
@@ -457,6 +464,7 @@ void PipelineCache::WarmUp() {
             pldata.Read(is_compute);
 
             bool result{};
+            load_old_meta = false;
             if (is_compute) {
                 result = LoadComputePipeline(ar);
             } else {
@@ -465,6 +473,10 @@ void PipelineCache::WarmUp() {
 
             if (result) {
                 ++num_pipelines;
+            } else if (load_old_meta) {
+                // A shader from another BB_SPIRV_PRECISE mode or build: it could never preload
+                // again, so the cache migrates like one with old pipeline keys.
+                ++num_old_format;
             }
         });
 
@@ -530,9 +542,12 @@ PipelineCache::StoredReport PipelineCache::LoadStored() {
                 return;
             }
             load_conflict = false;
+            load_old_meta = false;
             if (is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar)) {
                 ++report.loaded;
                 report.legacy += loading_legacy ? 1 : 0;
+            } else if (load_old_meta) {
+                ++report.old_format;
             } else {
                 ++report.not_loaded;
                 report.conflicts += load_conflict ? 1 : 0;

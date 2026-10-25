@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #ifndef BB_RUNTIME_H
 #define BB_RUNTIME_H
 #include <stdint.h>
@@ -97,6 +98,10 @@ void runtime_context_lock_stats(void);
 /* runtime_thread.c (macOS): CPU time of the game's main thread (0) or the calling thread (1). */
 uint64_t runtime_thread_cpu_ns(int which);
 void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char busiest_name[32]);
+/* BB_SAMPLE_MS sampler of the main thread (runtime_sampler.c): the guest image at load, the
+ * main thread's CPU time at each flip. */
+void runtime_sampler_init(const void *image, uint64_t size);
+void runtime_sampler_flip(uint64_t main_cpu_ns);
 void *runtime_low_malloc(size_t size);
 void *runtime_low_calloc(size_t nmemb, size_t size);
 void *runtime_low_alloc_aligned(size_t size, size_t align);
@@ -107,7 +112,10 @@ void runtime_ajm_report(void);
 uintptr_t runtime_audio_resolve(const char *name);
 void runtime_audio_report(void);
 uintptr_t runtime_pad_resolve(const char *name);
+extern volatile int runtime_bench_map_opened; /* runtime_file.c: a map file was opened */
 void runtime_pad_report(void);
+/* Mouse look reads the GPU process's shared block through this accessor (gpu_process_start). */
+void runtime_pad_set_shared(void *(*shared)(void));
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
 void runtime_savedata_configure(const char *title);
