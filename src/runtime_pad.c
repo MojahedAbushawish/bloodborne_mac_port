@@ -146,8 +146,6 @@ static void sample_host(PadData *d) {
         {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2},
         {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
         {SDL_SCANCODE_F1,BTN_OPTIONS}, {SDL_SCANCODE_O,BTN_OPTIONS},
-        {SDL_SCANCODE_UP,BTN_UP}, {SDL_SCANCODE_DOWN,BTN_DOWN},
-        {SDL_SCANCODE_LEFT,BTN_LEFT}, {SDL_SCANCODE_RIGHT,BTN_RIGHT},
         {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
     };
     for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
@@ -222,7 +220,8 @@ static void record_sample(const PadData *d) {
     static const char *path; static int checked, f9_was_down;
     if (!checked) { path=getenv("BB_PAD_RECORD"); checked=1; }
     if (!path || !*path || !sdl_ready) return;
-    const bool *k=SDL_GetKeyboardState(NULL);
+    const bool *k=bbgpu_split_keyboard(); /* the window is in the GPU host (split) */
+    if (!k) k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     const int f9=k && k[SDL_SCANCODE_F9];
     if (f9 && !f9_was_down) {
         if (record_file) {
