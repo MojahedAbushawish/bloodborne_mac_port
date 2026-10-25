@@ -9,10 +9,12 @@ import Foundation
 final class LauncherModel: ObservableObject {
     let layout: Layout
     let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
+    let benchmark = BenchmarkRunner()
     private let env = ProcessInfo.processInfo.environment
     private var confFile = IniFile()
     private var settingsFile = IniFile()
     private var updaterChanges: AnyCancellable?
+    private var benchmarkChanges: AnyCancellable?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -31,6 +33,8 @@ final class LauncherModel: ObservableObject {
     /// The running or last session's text log (SessionLog).
     @Published private(set) var sessionLog: URL?
     private var sessionStart: Date?
+    /// Why the Benchmark button can't run (no assets in this build), else nil.
+    @Published private(set) var benchmarkProblem: String?
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -40,6 +44,7 @@ final class LauncherModel: ObservableObject {
         dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
         // The window's update sheet follows the updater.
         updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        benchmarkChanges = benchmark.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
     var confURL: URL { layout.launchConfURL(env: env) }
@@ -77,6 +82,7 @@ final class LauncherModel: ObservableObject {
         let exists = FileManager.default.fileExists(atPath: settingsURL.path)
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
         settings = GameSettings(ini: settingsFile)
+        benchmarkProblem = Benchmark.assetsProblem(layout.benchmarkAssets(env: env))
         checkGame()
     }
 
@@ -221,6 +227,53 @@ final class LauncherModel: ObservableObject {
         } catch {
             exitMessage = "The game could not start: \(error.localizedDescription)"
             onExit?(-1)
+        }
+    }
+
+    /// The Benchmark button: two game launches with the benchmark's own save and settings
+    /// (docs/DESIGN_BENCHMARK.md); the results sheet opens when they are done. `confirm` false:
+    /// started by `--benchmark` (scripted comparisons), no question first.
+    func startBenchmark(confirm: Bool = true) {
+        guard !running, let game = config.gameDir else { return }
+        if let benchmarkProblem {
+            let alert = NSAlert()
+            alert.messageText = "The benchmark is not available"
+            alert.informativeText = benchmarkProblem
+            alert.runModal()
+            return
+        }
+        save()
+        if GameRunner.isGameRunning {
+            exitMessage = "Bloodborne is already running. Quit the game before starting the benchmark."
+            return
+        }
+        if !GameRunner.hasRosetta {
+            exitMessage = "The game needs Rosetta 2: press Play once to install it."
+            return
+        }
+        if confirm {
+            let alert = NSAlert()
+            alert.messageText = "Run the benchmark?"
+            alert.informativeText = "The game starts twice, about 6 minutes in all: a recorded walk through Central Yharnam, then 30 seconds standing still without a frame cap. Don't touch the game window, the keyboard or a controller while it runs: the walk is replayed, and any input would change it.\n\nThe benchmark uses its own save and fixed settings (1920 × 1080, upscaler off, windowed). Your saves and settings are not changed. The results open here when it's done."
+            alert.addButton(withTitle: "Start Benchmark")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        let job = BenchmarkRunner.Job(layout: layout, gameDir: game, dataDir: dataDir, env: env,
+                                      assets: layout.benchmarkAssets(env: env))
+        do {
+            try benchmark.start(job, home: URL(fileURLWithPath: NSHomeDirectory()), started: { [weak self] in
+                self?.running = true
+                self?.exitMessage = nil
+                self?.onStarted?()
+            }, done: { [weak self] in
+                guard let self else { return }
+                self.running = false
+                self.load()
+                self.onExit?(0)
+            })
+        } catch {
+            exitMessage = "The benchmark could not start: \(error.localizedDescription)"
         }
     }
 

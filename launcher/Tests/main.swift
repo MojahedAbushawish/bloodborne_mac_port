@@ -538,8 +538,152 @@ do {
     check(!hugeLink.inline && hugeBody.contains("paste it below") && hugeBody.contains("Apple M3 Max"), "too long: paste from the clipboard")
 }
 
+// Benchmark: assets, per-pass launch plans and settings.
+do {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("launcher-bench-\(getpid())")
+    let app = root.appendingPathComponent("Bloodborne.app")
+    let contents = app.appendingPathComponent("Contents")
+    let repo = root.appendingPathComponent("repo")
+    let packaged = Layout.packaged(contents: contents)
+    let checkout = Layout.checkout(repo: repo, app: app)
+    let env = ["HOME": "/Users/h", "PATH": "/usr/bin:/bin", "BB_FPS_LIMIT": "40", "BB_PRESENT_MODE": "Fifo"]
+    check(packaged.benchmarkAssets(env: env).path == contents.appendingPathComponent("Resources/benchmark").path, "packaged benchmark assets")
+    check(checkout.benchmarkAssets(env: env).path == repo.appendingPathComponent("out/benchmark").path, "checkout benchmark assets")
+    check(checkout.benchmarkAssets(env: env.merging(["BB_BENCH_ASSETS": "/b"]) { $1 }).path == "/b", "BB_BENCH_ASSETS")
+
+    let assets = root.appendingPathComponent("assets")
+    check(Benchmark.assetsProblem(assets) != nil, "no assets: unavailable")
+    try? fm.createDirectory(at: assets.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005"), withIntermediateDirectories: true)
+    check(Benchmark.assetsProblem(assets) != nil, "save without the route: unavailable")
+    try? Data([1, 2]).write(to: assets.appendingPathComponent("route.pad"))
+    try? Data([7]).write(to: assets.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005/userdata0000"))
+    check(Benchmark.assetsProblem(assets) == nil, "route and save: available")
+
+    let work = root.appendingPathComponent("work"), out = root.appendingPathComponent("Benchmarks/run")
+    let save = work.appendingPathComponent("savedata/1/CUSA00207/SPRJ0005/userdata0000")
+    try? Benchmark.prepare(.traversal, assets: assets, work: work)
+    check(fm.contents(atPath: save.path) == Data([7]), "fresh save copy")
+    try? Data([9]).write(to: save)
+    try? Benchmark.prepare(.throughput, assets: assets, work: work)
+    check(fm.contents(atPath: save.path) == Data([7]), "the next pass starts from the original save again")
+    let ini = IniFile(contentsOf: work.appendingPathComponent("benchmark.ini"))
+    check(ini["fps_cap"] == "0" && ini["output_res"] == "1920x1080" && ini["upscaler"] == "off" && ini["preset"] == "0", "throughput ini")
+    check(ini["show_fps"] == "1" && ini["live_resolution"] == "0" && ini["fullscreen"] == "0" && ini["metal_hud"] == "0", "throughput ini display")
+    check(ini["skip_intro"] == "1" && ini["texture_compression"] == "1" && ini["effect_dof"] == "1" && ini["effect_ssr"] == "0", "intro skipped, effects at defaults")
+    check(Benchmark.settings(for: .traversal)["fps_cap"] == "60", "traversal capped at 60")
+
+    let game = URL(fileURLWithPath: "/Games/CUSA03173")
+    let data = URL(fileURLWithPath: "/Users/h/Library/Application Support/Bloodborne")
+    let t = Benchmark.launchPlan(.traversal, layout: packaged, gameDir: game, dataDir: data, env: env, assets: assets, work: work, out: out).environment
+    check(t["BB_BENCHMARK"] == "traversal" && t["BB_BENCH_OUT"] == out.appendingPathComponent("traversal.csv").path, "traversal mode and CSV")
+    check(t["BB_PAD_REPLAY"] == assets.appendingPathComponent("route.pad").path && t["BB_FPS"] == "60" && t["BB_FRAME_STATS"] == "1", "traversal replay")
+    check(t["BB_MODS_ENABLED"] == "0" && t["BB_PATCHES_DIR"] == work.appendingPathComponent("no-patches").path, "no mods or patch files")
+    check(t["BB_SAVE_DIR"] == work.appendingPathComponent("savedata").path && t["BB_CONFIG"] == work.appendingPathComponent("benchmark.ini").path, "benchmark save and settings, not the player's")
+    check(t["BB_FPS_LIMIT"] == nil && t["BB_PRESENT_MODE"] == nil && t["BB_VBLANK_HZ"] == nil && t["BB_BENCH_SECONDS"] == nil, "inherited pacing variables removed")
+    check(t["BB_GAME_DIR"] == game.path && t["BB_DATA_DIR"] == data.path && t["BB_PREBUILT"] == "1", "the normal launch underneath (warm shader cache)")
+    let p = Benchmark.launchPlan(.throughput, layout: checkout, gameDir: game, dataDir: data, env: env, assets: assets, work: work, out: out)
+    let e = p.environment
+    check(e["BB_BENCHMARK"] == "throughput" && e["BB_BENCH_OUT"] == out.appendingPathComponent("throughput.csv").path && e["BB_BENCH_SECONDS"] == "30", "throughput mode")
+    check(e["BB_FPS"] == "uncap" && e["BB_FPS_LIMIT"] == "0" && e["BB_VBLANK_HZ"] == "480" && e["BB_PRESENT_MODE"] == "Immediate", "throughput uncapped")
+    check(e["BB_PAD_REPLAY"] == nil && e["BB_SAVE_DIR"] == work.appendingPathComponent("savedata").path, "throughput: no replay, benchmark save")
+    check(p.arguments == [repo.appendingPathComponent("run.sh").path], "checkout run.sh")
+    check(Benchmark.runFolderName(Date(timeIntervalSince1970: 0)).count == "yyyy-MM-dd HH.mm.ss".count, "run folder name")
+    try? fm.removeItem(at: root)
+}
+
+// Benchmark: the game's CSV.
+do {
+    let header = "t_ms,frame_ms,game_ms,gpu_ms,draws,compiles,compile_wait_ms,upload_mb,game_cpu_ms,gpu_thread_ms,ahead_ms,game_faults\n"
+    let ok = BenchmarkCSV(text: "# bloodborne-benchmark 1\n# pass=traversal\n# started=1729800000.123\n# output=1920x1080\n" + header
+        + "16.7,16.7,16.6,9.1,4210,0,0.0,0.4,21.5,5.9,0.0,0\n33.4,16.7,16.6,9.0,4200,2,3.5,0.0,21.0,6.0,0.0,1\n# ended=1729800130.456\n# result=ok\n")
+    check(ok.outcome == .ok && ok.frames.count == 2 && ok.meta["pass"] == "traversal" && ok.meta["format"] == "1", "ok pass")
+    check(ok.started == 1729800000.123 && ok.ended == 1729800130.456, "measuring window")
+    check(ok.frames[1] == BenchmarkFrame(t: 33.4, frame: 16.7, game: 16.6, gpu: 9.0, draws: 4200, compiles: 2, compileWait: 3.5,
+                                         upload: 0, gameCPU: 21.0, gpuThread: 6.0, ahead: 0, faults: 1), "row fields")
+    let error = BenchmarkCSV(text: "# bloodborne-benchmark 1\n# pass=throughput\n" + header + "# result=error: no gameplay after 150 s\n")
+    check(error.outcome == .error("no gameplay after 150 s") && error.frames.isEmpty, "error pass")
+    let cut = BenchmarkCSV(text: "# pass=traversal\n" + header + "16.7,16.7,16.6,9.1,4210,0,0.0,0.4,21.5,5.9,0.0,0\n33.4,16.7,16.6,9.")
+    check(cut.outcome == .interrupted && cut.frames.count == 1, "truncated: interrupted, the cut row skipped")
+    check(BenchmarkCSV(text: "").outcome == .interrupted, "no file: interrupted")
+    check(BenchmarkCSV(text: "frame_ms,t_ms\n20,20\n# result=ok\n").frames == [BenchmarkFrame(t: 20, frame: 20)], "columns by name")
+}
+
+// Benchmark: metrics on a known frame list, system samples, the report.
+do {
+    // 200 frames of 10 ms (GPU 5 ms) with three hitches: a 100 ms compile, a 40 ms stream, a 30 ms GPU frame.
+    var frames: [BenchmarkFrame] = []
+    var t = 0.0
+    for i in 0..<200 {
+        var f = BenchmarkFrame(frame: 10, game: 9, gpu: 5)
+        if i == 50 { f.frame = 100; f.compileWait = 50; f.compiles = 3 }
+        if i == 100 { f.frame = 40; f.upload = 40 }
+        if i == 150 { f.frame = 30; f.gpu = 28 }
+        t += f.frame
+        f.t = t
+        frames.append(f)
+    }
+    let m = FrameMetrics(frames)!
+    func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.01 }
+    check(m.frames == 200 && near(m.seconds, 2.14) && near(m.averageFPS, 200 / 2.14), "average FPS: \(m.averageFPS)")
+    check(m.maxFPS == 98, "best 1 s window: \(String(describing: m.maxFPS))")
+    check(near(m.low1FPS, 1000 / 70) && near(m.low01FPS, 10), "1% low = slowest 2 frames, 0.1% = the slowest one")
+    check(m.over33 == 2 && m.over50 == 1 && m.over100 == 0 && m.longestMs == 100 && m.medianMs == 10, "stutter counts")
+    check(m.hitchThresholdMs == 25 && m.hitches == 3 && near(m.hitchMsPerMinute, 140 / 2.14 * 60), "hitches: \(m.hitchMsPerMinute)")
+    check(m.worstHitches.map(\.cause) == [.compile, .streaming, .gpu] && m.worstHitches.map(\.frameMs) == [100, 40, 30], "worst hitches, causes")
+    check(near(m.worstHitches[0].timeS, 0.6), "hitch time into the route")
+    check(near(m.gpuBusyPercent, 100 * 1023 / 2140) && near(m.gpuMsPerFrame, 1023 / 200.0) && m.compiles == 3 && m.compileWaitMs == 50, "GPU busy")
+    check(FrameMetrics.hitch(BenchmarkFrame(frame: 60, game: 55, gpu: 10)).cause == .gameCPU, "game CPU hitch")
+    check(FrameMetrics.hitch(BenchmarkFrame(frame: 60, game: 20, gpu: 10, ahead: 40)).cause == .gpu, "frames-ahead wait: GPU")
+    check(FrameMetrics.hitch(BenchmarkFrame(frame: 60, game: 20, gpu: 10, faults: 25)).cause == .streaming, "faults: streaming")
+    var typical = FrameMetrics.Typical()
+    typical.upload = 14; typical.faults = 46
+    check(FrameMetrics.hitch(BenchmarkFrame(frame: 60, game: 20, gpu: 10, upload: 15, faults: 50), typical).cause == .other,
+          "typical uploads and faults are not streaming")
+    check(FrameMetrics.hitch(BenchmarkFrame(frame: 60, game: 20, gpu: 10, upload: 120, faults: 50), typical).cause == .streaming,
+          "a 120 MB upload is streaming")
+    check(FrameMetrics.hitch(BenchmarkFrame(frame: 60, game: 20, gpu: 10)).cause == .other, "other")
+    check(FrameMetrics([]) == nil, "no frames, no metrics")
+    let short = FrameMetrics([BenchmarkFrame(t: 16, frame: 16)])!
+    check(short.maxFPS == nil && near(short.low1FPS, 62.5) && short.hitches == 0, "a pass under 1 s")
+
+    func sample(_ time: Double, cpu: Double?, mb: Double, swap: Double, ins: UInt64, pressure: Int = 1, pass: BenchmarkPass = .traversal) -> SystemSample {
+        SystemSample(pass: pass, time: time, probe: ProcessSample(cpu: cpu, footprintMB: mb), host: nil, swapUsedMB: swap,
+                     swapIns: ins, pressure: pressure, thermal: 0)
+    }
+    let samples = [sample(99, cpu: 500, mb: 9000, swap: 0, ins: 0, pressure: 4), sample(100, cpu: nil, mb: 2000, swap: 10, ins: 5),
+                   sample(101, cpu: 150, mb: 3000, swap: 30, ins: 9, pressure: 2), sample(102, cpu: 250, mb: 2500, swap: 20, ins: 12),
+                   sample(101, cpu: 900, mb: 1, swap: 0, ins: 0, pass: .throughput)]
+    let s = SystemMetrics(samples.filter { $0.pass == .traversal }, from: 100, to: 102)!
+    check(s.processes == [ProcessStats(name: "bb-probe", meanCPU: 200, peakCPU: 250, peakFootprintMB: 3000)], "process CPU and memory in the window")
+    check(s.swapStartMB == 10 && s.swapEndMB == 20 && s.swapPeakMB == 30 && s.swapIns == 7, "swap")
+    check(s.worstPressure == "warning" && s.worstThermal == "nominal", "pressure (loading outside the window ignored)")
+    check(samples[1].csvRow == "traversal,100.000,,2000.0,,,10.0,5,1,0" && SystemSample.csvHeader.split(separator: ",").count == 10, "system.csv row")
+
+    var csv = BenchmarkCSV(text: "# started=100\n# ended=102\n# result=ok\n")
+    csv.frames = frames
+    let info = BenchmarkSystemInfo(model: "Mac16,5", chip: "Apple M4 Max", performanceCores: 12, efficiencyCores: 4, gpuCores: 40,
+                                   memoryGB: 64, macOS: "27.0.1", macOSBuild: "27A1", appVersion: "0.5.5",
+                                   appBuild: "0.5.5-3-gabc", commit: "abc", display: "3456x2234 @ 120 Hz", power: "AC power", lowPowerMode: false)
+    let passes = [PassSummary(pass: .traversal, csv: csv, samples: samples, exitStatus: 0),
+                  PassSummary(pass: .throughput, csv: BenchmarkCSV(text: "t_ms,frame_ms\n5,5\n"), samples: samples, exitStatus: 1,
+                              problem: "GPU host lost")]
+    let summary = BenchmarkSummary(date: "2026-10-24 21.30.05", system: info, passes: passes)
+    let report = summary.markdown
+    check(!summary.complete && passes[0].ok && !passes[1].ok, "an interrupted pass makes the run incomplete")
+    for line in ["# Bloodborne benchmark, 2026-10-24 21.30.05", "Mac16,5, Apple M4 Max, 12P + 4E CPU, 40-core GPU, 64 GB",
+                 "**macOS:** 27.0.1 (27A1); app 0.5.5 (0.5.5-3-gabc), commit abc", "## Traversal:", "| Average FPS | 93.5 |",
+                 "| 1% / 0.1% low | 14.3 / 10.0 FPS |", "| Hitches (over 25.0 ms) | 3,", "| 0.6 s | 100.0 ms | compile: compile wait 50 ms",
+                 "| bb-probe | CPU 200% mean, 250% peak; 2.9 GB peak memory |", "**Result: interrupted", "(exit status 1)", "> GPU host lost"] {
+        check(report.contains(line), "report has \(line.debugDescription)")
+    }
+    check(!report.components(separatedBy: "## Throughput")[0].contains("Max FPS"), "no max FPS for the capped traversal")
+    check(report.contains("| Max FPS (best 1 s) |") == false, "throughput under 1 s: no max FPS")
+    check((try? JSONDecoder().decode(BenchmarkSummary.self, from: summary.json)) == summary, "summary.json round trip")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, session logs, native crashes)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, session logs, native crashes, benchmark)")
