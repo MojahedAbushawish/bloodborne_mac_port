@@ -160,6 +160,18 @@ struct LauncherView: View {
                         .help("Apple's Metal HUD: FPS, GPU time and frame pacing, top right")
                     Toggle("Skip intro videos", isOn: effectBinding("skip_intro"))
                 }
+                Section("Controls") {
+                    Toggle("Mouse camera", isOn: $model.settings.mouseLook)
+                    Text(model.settings.mouseLook
+                         ? "Click in the game window to turn the camera with the mouse; \u{2318} gives the cursor back. The arrow keys are the d-pad (menus, weapons, items)."
+                         : "The arrow keys turn the camera. Controllers always work.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("Keyboard and mouse") {
+                        ForEach(Controls.rows(mouseLook: model.settings.mouseLook), id: \.0) { row in
+                            LabeledContent(row.0, value: row.1)
+                        }
+                    }
+                }
                 Section("Locations") {
                     FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",
                               problem: model.checkingGame ? nil : model.gameProblem,

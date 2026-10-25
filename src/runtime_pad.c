@@ -190,9 +190,11 @@ static void sample_devices(PadData *d) {
  * Without one (the unit tests link the runtime without gpu_process.c) there is no mouse. */
 static void *(*pad_shared)(void);
 void runtime_pad_set_shared(void *(*shared)(void)) { pad_shared=shared; }
-/* Mouse look is active while the host window holds the cursor (a click in the window with the
- * Mouse camera setting on). */
+/* Mouse look is on when the Mouse camera setting is (bbport.ini mouse_look, read at start; the
+ * launcher sets it) or while the host window holds the cursor (switched on in the in-game menu).
+ * The arrow keys are then the d-pad, from the title screen on. */
 static int mouse_look_active(void) {
+    if (bbgpu_mouse_look_enabled()) return 1;
 #ifdef __APPLE__
     const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
     return s && __atomic_load_n(&s->mouse_captured,__ATOMIC_ACQUIRE);
