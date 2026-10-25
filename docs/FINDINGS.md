@@ -1877,3 +1877,11 @@ data, `--benchmark` runs alternating builds, no compiles in any run.
 
   GPU time −9%, but more hitches on the route in every run (extra single frames of 35-60 ms GPU),
   as in the 300 s soak. Repeat before merging (posted on #39).
+
+## 2026-10-25: 16:10 native resolutions (#75)
+
+Kyo's 16:10 patches (1280x800, 1920x1200, 2560x1600) go through the same path as the ultrawide
+presets (`ultrawide_writes`: scene/UI size, camera aspect, the texture pool above 1080p).
+M4 Max, benchmark save in Central Yharnam, upscaler off: both 1920x1200 and 2560x1600 render the
+whole scene at that size ("observed scene depth"), the HUD and item boxes sit correctly, 60 FPS
+at the cap. 2560x1600 gets the under-24 GB memory warning like the 1440p ultrawides.
