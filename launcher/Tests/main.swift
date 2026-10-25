@@ -682,8 +682,134 @@ do {
     check((try? JSONDecoder().decode(BenchmarkSummary.self, from: summary.json)) == summary, "summary.json round trip")
 }
 
+// Mods & Cheats: the scripts' reports, mods.json, cheats=, patches.json, imports, save backups.
+do {
+    let report = try? ModReport.decode("""
+    {"mods": [{"name": "A", "enabled": true, "files": 3, "error": null},
+              {"name": "Broken", "enabled": true, "files": 0, "error": "Broken: no game folders"},
+              {"name": "B", "enabled": false, "files": 1, "error": null}],
+     "conflicts": [{"path": "dvdroot_ps4/chr/c1000.chrbnd.dcx", "mods": ["A", "C"], "winner": "C"}]}
+    """)
+    check(report?.mods.map(\.name) == ["A", "Broken", "B"] && report?.mods[0].error == nil
+          && report?.mods[1].error == "Broken: no game folders" && report?.mods[2].enabled == false, "mods report")
+    check(report?.conflicts.first?.line == "dvdroot_ps4/chr/c1000.chrbnd.dcx — A, C: C wins", "conflict line")
+    check((try? ModReport.decode("{\"mods\": [], \"conflicts\": []}")) == ModReport(mods: [], conflicts: []), "empty report")
+    check((try? ModReport.decode("Mods: oops")) == nil, "not JSON")
+
+    let list = try? PatchList.decode("""
+    {"cheats": [{"name": "No Rally Decay", "group": "Gameplay", "label": "Rally doesn't decay", "exclusive": "rally", "note": "n"},
+                {"name": "Disable Rally (HP Regain)", "group": "Gameplay", "label": "No rally", "exclusive": "rally", "note": ""},
+                {"name": "Player No Dead (Read note)", "group": "Cheats", "label": "Player can't die", "exclusive": null, "note": "a\\nb"},
+                {"name": "Increased camera distance", "group": "Camera", "label": "Camera further away", "exclusive": null, "note": ""}],
+     "external": [{"key": "x.xml/Fast", "file": "x.xml", "name": "Fast", "author": "me", "note": "", "enabled": true},
+                  {"key": "x.xml/None", "file": "x.xml", "name": null, "author": "", "note": "", "enabled": false}]}
+    """)
+    let cheats = list?.cheats ?? []
+    check(cheats.count == 4 && cheats[0].exclusive == "rally" && cheats[2].exclusive == nil && cheats[2].note == "a\nb", "cheats list")
+    check(list?.external.count == 2 && list?.external[1].name == nil && list?.external[0].enabled == true, "external patches")
+    check(Cheats.grouped(cheats).map(\.group) == ["Cheats", "Gameplay", "Camera"], "group order")
+
+    // Exclusive groups: one of rally at a time; others untouched.
+    var on = Cheats.toggle("No Rally Decay", on: true, in: ["Increased camera distance"], cheats: cheats)
+    check(on == ["Increased camera distance", "No Rally Decay"], "turn on: \(on)")
+    on = Cheats.toggle("Disable Rally (HP Regain)", on: true, in: on, cheats: cheats)
+    check(on == ["Increased camera distance", "Disable Rally (HP Regain)"], "exclusive turns the other off: \(on)")
+    on = Cheats.toggle("Increased camera distance", on: false, in: on, cheats: cheats)
+    check(on == ["Disable Rally (HP Regain)"], "turn off")
+    check(Cheats.toggle("Player No Dead (Read note)", on: true, in: ["Player No Dead (Read note)"], cheats: cheats) == ["Player No Dead (Read note)"], "no duplicate")
+
+    // cheats= through GameSettings: other keys stay, no duplicate key, none on = no key.
+    var ini = IniFile(text: "# header\ncheats=No Rally Decay; Unknown Patch ;No Rally Decay\nmy_key=7\n")
+    var settings = GameSettings(ini: ini)
+    check(settings.cheats == ["No Rally Decay", "Unknown Patch"], "parse cheats: \(settings.cheats)")
+    settings.cheats.append("Increased camera distance")
+    settings.apply(to: &ini)
+    check(ini["cheats"] == "No Rally Decay;Unknown Patch;Increased camera distance" && ini["my_key"] == "7"
+          && ini.text.hasPrefix("# header\ncheats=") && ini.text.components(separatedBy: "cheats=").count == 2, "cheats round trip: \(ini.text)")
+    check(GameSettings(ini: ini) == settings, "read back")
+    settings.cheats = []
+    settings.apply(to: &ini)
+    check(ini["cheats"] == nil && ini["my_key"] == "7", "no cheats: key removed")
+    check(Cheats.parse(nil).isEmpty && Cheats.parse(" ; ").isEmpty && Cheats.format([]) == nil, "empty cheats")
+    check(Cheats.summary(mods: 0, cheats: 0) == "No mods or cheats" && Cheats.summary(mods: 2, cheats: 1) == "2 mods · 1 cheat on"
+          && Cheats.summary(mods: 1, cheats: 0) == "1 mod on" && Cheats.summary(mods: 0, cheats: 3) == "3 cheats on", "summary")
+
+    // mods.json: the list's order, the unticked ones disabled; moves.
+    let mods = report?.mods ?? []
+    let config = ModsConfig(mods: mods.moving("B", by: -1))
+    check(config.order == ["A", "B", "Broken"] && config.disabled == ["B"], "mods.json from the list")
+    check(mods.moving("A", by: -1) == mods && mods.moving("B", by: 1) == mods, "moves stop at the ends")
+    let json = (try? JSONSerialization.jsonObject(with: config.json)) as? [String: [String]]
+    check(json == ["order": ["A", "B", "Broken"], "disabled": ["B"]], "mods.json format")
+    check((try? JSONDecoder().decode(ModsConfig.self, from: Data("{\"order\": [\"x\"]}".utf8))) == ModsConfig(order: ["x"]), "partial mods.json")
+
+    // patches.json
+    var selection = PatchSelection(enabled: ["b.xml/On"], disabled: ["a.xml/Off"])
+    selection.set("a.xml/Off", on: true)
+    selection.set("c.xml/New", on: false)
+    let patchesJSON = (try? JSONSerialization.jsonObject(with: selection.json)) as? [String: [String]]
+    check(patchesJSON == ["enabled": ["a.xml/Off", "b.xml/On"], "disabled": ["c.xml/New"]], "patches.json: \(String(describing: patchesJSON))")
+
+    // Files on disk: mods.json, patches.json and the enabled folders.
+    let fm = FileManager.default
+    let data = fm.temporaryDirectory.appendingPathComponent("launcher-mods-\(getpid())")
+    let files = ModFiles(dataDir: data)
+    check(files.mods.lastPathComponent == "mods" && files.patchesConfig.lastPathComponent == "patches.json"
+          && ModFiles(dataDir: data, env: ["BB_MODS_DIR": "/x/m"]).mods.path == "/x/m", "mod files")
+    for name in ["A", "B", ".hidden"] { try? fm.createDirectory(at: files.mods.appendingPathComponent(name), withIntermediateDirectories: true) }
+    try? Data().write(to: files.mods.appendingPathComponent("readme.txt"))
+    check(ModsConfig.enabledMods(modsDir: files.mods, config: files.modsConfig) == ["A", "B"], "all folders on without mods.json")
+    try? ModsConfig(order: ["B", "A"], disabled: ["B"]).write(to: files.modsConfig)
+    check(ModsConfig(contentsOf: files.modsConfig) == ModsConfig(order: ["B", "A"], disabled: ["B"]), "mods.json read back")
+    check(ModsConfig.enabledMods(modsDir: files.mods, config: files.modsConfig) == ["A"], "disabled folder")
+    try? selection.write(to: files.patchesConfig)
+    check(PatchSelection(contentsOf: files.patchesConfig) == selection, "patches.json read back")
+
+    // Import names.
+    check(ModImport.baseName(of: URL(fileURLWithPath: "/d/Better Hunter.zip")) == "Better Hunter"
+          && ModImport.baseName(of: URL(fileURLWithPath: "/d/Folder.v2")) == "Folder.v2"
+          && ModImport.baseName(of: URL(fileURLWithPath: "/d/.zip")) == "Mod", "import base name")
+    check(ModImport.uniqueName("X", existing: ["Y"]) == "X" && ModImport.uniqueName("X", existing: ["x", "X 2"]) == "X 3", "import collisions")
+
+    // Backups: rotation keeps the newest five dated folders, the signature ignores order.
+    let names = ["2026-10-20 10.00.00", "2026-10-21 10.00.00", "2026-10-25 09.00.00", "2026-10-22 10.00.00", "last.json",
+                 "2026-10-23 10.00.00", "2026-10-24 10.00.00", "2026-10-24 10.00.00 2", "notes"]
+    check(SaveBackup.toDelete(names) == ["2026-10-21 10.00.00", "2026-10-20 10.00.00"], "rotation: \(SaveBackup.toDelete(names))")
+    check(SaveBackup.toDelete(Array(names.prefix(3))).isEmpty, "fewer than five")
+    let signature = ModSignature(mods: ["B", "A"], cheats: ["z", "y"])
+    check(signature == ModSignature(mods: ["A", "B"], cheats: ["y", "z"]) && signature.mods == ["A", "B"], "signature sorted")
+    check(!SaveBackup.needed(ModSignature(mods: [], cheats: []), last: nil), "nothing on: no backup")
+    check(SaveBackup.needed(signature, last: nil) && !SaveBackup.needed(signature, last: signature)
+          && SaveBackup.needed(signature, last: ModSignature(mods: ["A"], cheats: ["y", "z"])), "backup per new set")
+    var date = DateComponents()
+    (date.year, date.month, date.day, date.hour, date.minute, date.second) = (2026, 10, 25, 9, 5, 7)
+    let when = Calendar.current.date(from: date)!
+    check(SaveBackup.folderName(when) == "2026-10-25 09.05.07" && SaveBackup.isBackupName("2026-10-25 09.05.07"), "backup name")
+
+    let save = data.appendingPathComponent("user/savedata")
+    try? fm.createDirectory(at: save.appendingPathComponent("0/slot"), withIntermediateDirectories: true)
+    try? Data("save".utf8).write(to: save.appendingPathComponent("0/slot/userdata0000"))
+    for name in names where SaveBackup.isBackupName(name) {
+        try? fm.createDirectory(at: files.backups.appendingPathComponent(name), withIntermediateDirectories: true)
+    }
+    let made = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, signature: signature, now: when)
+    check(made?.lastPathComponent == "2026-10-25 09.05.07"
+          && fm.fileExists(atPath: files.backups.appendingPathComponent("2026-10-25 09.05.07/savedata/0/slot/userdata0000").path), "backup copied")
+    check(SaveBackup.lastSignature(backups: files.backups) == signature, "signature recorded")
+    let kept = ((try? fm.contentsOfDirectory(atPath: files.backups.path)) ?? []).filter(SaveBackup.isBackupName).sorted()
+    check(kept == ["2026-10-23 10.00.00", "2026-10-24 10.00.00", "2026-10-24 10.00.00 2", "2026-10-25 09.00.00", "2026-10-25 09.05.07"],
+          "newest five kept: \(kept)")
+    let again = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, signature: signature, now: when)
+    check(again?.lastPathComponent == "2026-10-25 09.05.07 2", "same second: a second folder")
+    let empty = data.appendingPathComponent("no-saves")
+    var copiedNothing = false
+    do { copiedNothing = try SaveBackup.backUp(saveFolder: empty, backups: files.backups, signature: ModSignature(mods: ["C"], cheats: []), now: when) == nil } catch {}
+    check(copiedNothing && SaveBackup.lastSignature(backups: files.backups)?.mods == ["C"], "no saves yet: nothing copied, set recorded")
+    try? fm.removeItem(at: data)
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, session logs, native crashes, benchmark)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, session logs, native crashes, benchmark, mods and cheats)")

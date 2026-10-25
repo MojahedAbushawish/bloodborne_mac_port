@@ -35,6 +35,8 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack(spacing: 12) {
+                Button("Mods & Cheats…") { ModsWindow.show(launcher: model) }
+                Text(model.modsSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
                 UpdateBadge(updater: model.updater)
                 Spacer()
