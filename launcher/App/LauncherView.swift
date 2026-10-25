@@ -33,11 +33,13 @@ struct LauncherView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .disabled(model.running)
             Divider()
             HStack(spacing: 12) {
                 Button("Mods & Cheats…") { ModsWindow.show(launcher: model) }
                 Text(model.modsSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                    .disabled(model.running)
                 UpdateBadge(updater: model.updater)
                 Spacer()
                 if let progress = model.benchmark.progress {
@@ -50,16 +52,27 @@ struct LauncherView: View {
                         Button("Show Log", action: model.showLog)
                     }
                 }
-                Button("Benchmark…") { model.startBenchmark() }
+                if model.running && model.canStop {
+                    Text(model.stopping ? "Stopping…" : "Game running")
+                        .foregroundStyle(.secondary)
+                    Button(action: { model.stop() }) {
+                        Label("Stop", systemImage: "stop.fill").frame(minWidth: 80)
+                    }
+                    .controlSize(.large)
+                    .disabled(model.stopping)
+                    .help("Close the running game. Use the game's Exit Game menu first to finish saving.")
+                } else {
+                    Button("Benchmark…") { model.startBenchmark() }
+                        .controlSize(.large)
+                        .disabled(!model.canPlay)
+                        .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
+                    Button(action: model.play) {
+                        Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                    }
+                    .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
                     .disabled(!model.canPlay)
-                    .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
-                Button(action: model.play) {
-                    Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
                 }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
-                .disabled(!model.canPlay)
             }
             .padding()
         }
