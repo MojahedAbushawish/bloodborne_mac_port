@@ -219,7 +219,7 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 
 ## State as of 2026-10-24 night (benchmark, triage)
 
-- **Benchmark** on local branch `benchmark` (worktree `../bb-bench`, commit 1efa9d0, not pushed):
+- **Benchmark** (merged into master 2026-10-25, branch `benchmark`):
   `docs/DESIGN_BENCHMARK.md`. Launcher button + `--benchmark` (scripted); traversal = recorded
   route through Central Yharnam at fixed 60 (replay steps by host flips), throughput = 30 s
   uncapped stand; per-frame CSV from the GPU host, launcher sampler/report in
@@ -227,7 +227,7 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   bench-cleared-20261024/{savedata,route.pad}` (copy to `out/benchmark/`). Shipping the save in
   the release app is the owner's call (package_app.sh copies out/benchmark only if present).
   Shared block version 5 (#70 also bumps to 5: renumber whichever merges second).
-- **Fixes** on local branch `fixes-0.5.6` (worktree `../bb-fixes`, not pushed): F9 pad recording
+- **Fixes** (merged into master 2026-10-25, branch `fixes-0.5.6`): F9 pad recording
   in split mode, arrow keys no longer press the d-pad (#61), bounded wait for a stuck GPU host
   (#71). Launcher "end the previous copy" prompt (#71) and preferred display (#60) in backlog.
 - **Merged and pushed:** #40 (session logs; tested from the app). Closed as duplicates: memmove
@@ -236,11 +236,13 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   compare), #59 (rebase + QoS test), #64 (back to draft, FPS counter), #67 (keep plain test run,
   confirm deferred deletion). **Waiting on us:** gameplay/visual tests for #65, #68, #70, #64's
   promised run; #39 re-measured with the benchmark (ab-39 branch in ../bb-prtest).
-- **Mod manager (0.6, owner-approved with cheats):** local branch `mod-manager` (worktree
-  `../bb-mods`, commits cabdda2 + 5d469dd, not pushed): launcher "Mods & Cheats…" window (mods,
+- **Mod manager (0.6, owner-approved with cheats):** merged into master 2026-10-25 (branch
+  `mod-manager`): launcher "Mods & Cheats…" window (mods,
   cheats/tweaks via bbport.ini `cheats=`, patch files), save backups before a new mod/cheat set,
   `docs/DESIGN_MOD_MANAGER.md`. Enemy Control not offered (overlaps the FPS patches). Online rule
-  still open (with online-0.6). Benchmark branch disables mods/patch files.
+  still open (with online-0.6). The benchmark disables mods/patch files/cheats; its passes log
+  through SessionLogWriter (moved to `<pass>.log/.jsonl` next to the CSV). README has a "Coming in
+  0.6" section and PR contributor credits.
 
 ## Next steps (in order)
 
