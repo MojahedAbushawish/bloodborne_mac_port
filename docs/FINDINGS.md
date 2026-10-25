@@ -1928,3 +1928,14 @@ or Hunter's Dream screenshots; the player, who has played with it on since 2026-
 no artifacts (one check, 2026-10-17). Deferred copies: 0 conflicts in both scenes, ~170 copies deferred per frame in the
 clinic; screenshots 0.7 s apart switching it on and off differ less (1.88 mean per channel)
 than same-setting screenshots 1.4 s apart (3.10).
+
+## 2026-10-25: FPS++ patches wrote RET into the game's condition wait
+
+30/60/90/Uncap FPS++ write `C3 90 90 90 90` at 0x02483EC1, the timed-wait `call` inside the
+game's condition wait (0x02483E80: push rbp/r15/r14/rbx/rax; untimed waits, edx = -1, take another
+call). A RET there returns to the saved rax: any timed wait would crash (one caller would jump to
+0). Never seen, so timed waits are evidently not reached in normal play. patches.py now drops that
+write from every patch file (UNSAFE_WRITES), leaving the game's own wait. M4 Max, test data: 60 FPS
+benchmark walk 59.9 FPS, 8 frames > 33 ms (as before), same route; 120 cap with Uncap FPS++ 60 s,
+119.4 FPS, no crash. Enemy Control is now refused alongside an FPS patch (overlapping bytes at
+0x1972a7d). Source: an assessment comparing the port with Paleblood, verified by disassembly.

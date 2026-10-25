@@ -8,7 +8,7 @@
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
  *   IJKL d-pad (I up, K down, J left, L right).
  * Mouse (split mode, after a click in the window): the camera (right stick), left button R1,
- * right L2, middle R3, side buttons R2 and L1. */
+ * right L2, middle R3, side buttons R2 and L1; the arrow keys are then the d-pad. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -99,6 +99,7 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
+static int mouse_look_active(void);
 static void sample_devices(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
@@ -163,6 +164,15 @@ static void sample_devices(PadData *d) {
         d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
     if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_S])
         d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
+    if (mouse_look_active()) {
+        /* The mouse has the camera, so the arrow keys are the d-pad: menus scroll with them and in
+         * game they switch weapons, tools and quick items. Without mouse look they turn the camera. */
+        if (k[SDL_SCANCODE_UP]) d->buttons|=BTN_UP;
+        if (k[SDL_SCANCODE_DOWN]) d->buttons|=BTN_DOWN;
+        if (k[SDL_SCANCODE_LEFT]) d->buttons|=BTN_LEFT;
+        if (k[SDL_SCANCODE_RIGHT]) d->buttons|=BTN_RIGHT;
+        return;
+    }
     if (k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_RIGHT])
         d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
     if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_DOWN])
@@ -180,6 +190,16 @@ static void sample_devices(PadData *d) {
  * Without one (the unit tests link the runtime without gpu_process.c) there is no mouse. */
 static void *(*pad_shared)(void);
 void runtime_pad_set_shared(void *(*shared)(void)) { pad_shared=shared; }
+/* Mouse look is active while the host window holds the cursor (a click in the window with the
+ * Mouse camera setting on). */
+static int mouse_look_active(void) {
+#ifdef __APPLE__
+    const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
+    return s && __atomic_load_n(&s->mouse_captured,__ATOMIC_ACQUIRE);
+#else
+    return 0;
+#endif
+}
 static void add_mouse(PadData *d) {
 #ifdef __APPLE__
     const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
