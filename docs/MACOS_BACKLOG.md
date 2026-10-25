@@ -452,6 +452,11 @@ Each item: what was done for now, what the refinement is, and where it lives.
   index buffers are copied to staging instead, #36). Arena windows fixed both but stalled the GPU
   queue through the driver's wired-memory accounting (#42; `BB_ARENA_WINDOWS=1`). Options: split
   the arena into non-overlapping buffers of at most 4 GiB, or copy indirect records like indices.
+- **16:10 (and ultrawide) glitches while a level first loads (#75, 2026-10-25).** Seen by the
+  owner at 16:10 on 0.5.6 with their own save; settles once the level is in. Suspect: screen-size
+  targets created at the 16:9 size for the first frames before the native-size patch's sizes are
+  seen (`vk_rasterizer.cpp` "observed scene depth"). Capture a frame (`BB_FRAME_CAPTURE`) while it
+  happens.
 
 ## 2. Performance
 
@@ -709,6 +714,11 @@ Each item: what was done for now, what the refinement is, and where it lives.
   them. A correct one must leave texture-watched pages to the renderer.
 
 ## 3. Mac GUI
+
+- **16:10 menus keep 16:9 artwork (#75, 2026-10-25).** Kyo's 16:10 patches fix HUD, lock-on and HP
+  bar positions, but full-screen menus stay 16:9 with grey bars at the sides. The "16x10 and 4x3
+  UI Fixes" mod (Nexus 207) replaces them; consider pointing to it from the launcher when 16:10
+  is chosen (the mod manager can load it).
 
 - **Preferred display (#60, 2026-10-24).** The window always opens centred on the main display
   (`gpu/shim/window.cpp`, `SDL_WINDOWPOS_CENTERED`) and the default resolution comes from it

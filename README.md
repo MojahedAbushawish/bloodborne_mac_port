@@ -321,6 +321,9 @@ the log.
   (60/90/120) is not affected.
 - **Above 1080p, the selected item's icon in the HUD is missing** (an empty frame; #14). It is
   there at 1080p.
+- **At 16:10, full-screen menus keep their 16:9 artwork** (grey bars at the sides), and the first
+  moments of loading a level can glitch. The HUD itself is placed correctly. A UI mod such as
+  "16x10 and 4x3 UI Fixes" (Nexus Mods) fixes the menus and loads through **Mods & Cheats…**.
 
 ### What's next
 
