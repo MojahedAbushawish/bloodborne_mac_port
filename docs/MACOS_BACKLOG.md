@@ -469,6 +469,17 @@ Each item: what was done for now, what the refinement is, and where it lives.
   `address + size` checks in `src/runtime_memory.c` can wrap on garbage sizes (check before
   adding); `tools/bbrecomp/proto/check4.c` (static-recompilation branch) exits 0 on mismatches.
   Fix independently; do not copy Paleblood's GPL-3 sources.
+- **Cloth (dresses, coats) corrupts at 120 FPS (2026-10-25, owner, every release back to 0.5.0).**
+  The skirt of a dress turns into flat, posterised dark patches; taking the dress off and on fixes
+  it until the character walks. Seen at the 120 cap (Uncap FPS++, variable timing); looks like
+  cloth simulation that assumes 30/60 FPS steps. PR #77 (adaptive timing) scales cloth constraint
+  stiffness by frame time (about min(1, 60*dt)^2), which may be the missing piece; a smaller fix
+  could cap the cloth step or run cloth at fixed 60. Test at 60 vs 120 on the same save first.
+- **Red/purple face at 16:10 (2026-10-25, owner).** Seen with the 1920x1200 native patch, in a test
+  build without 0.5.5's GCN legacy/clamped float translations (that build looked worse overall);
+  the face is normal with the 16:10 patch off. Not yet checked on 0.5.7 itself. Suspects: a
+  screen-size target or skin (subsurface) pass still sized for 16:9 with the native-size patch, or
+  NaN/Inf values (the red-flash class) on the skin shader.
 
 ## 2. Performance
 
@@ -740,6 +751,14 @@ Each item: what was done for now, what the refinement is, and where it lives.
   them. A correct one must leave texture-watched pages to the renderer.
 
 ## 3. Mac GUI
+
+- **Launcher: "Checking the game folder" never finishes (2026-10-25).** Seen with a checkout-built
+  app (make_app.sh) on the owner's real data; the released 0.5.7 is fine. `checkGame` only clears
+  `checkingGame` when `config.gameDir == folder` (URL equality), so a reload in between with a
+  differently formed URL drops the result. Compare standardized paths and always clear the flag
+  for the latest check (generation counter).
+- **Launcher: the Controls section pushes Locations off the bottom of the window** (0.5.7, the
+  window is sized for a 13" Air). Move the bindings list to Advanced or make Controls one row.
 
 - **16:10 menus keep 16:9 artwork (#75, 2026-10-25).** Kyo's 16:10 patches fix HUD, lock-on and HP
   bar positions, but full-screen menus stay 16:9 with grey bars at the sides. The "16x10 and 4x3
