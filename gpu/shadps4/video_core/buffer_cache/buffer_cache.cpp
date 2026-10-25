@@ -77,8 +77,7 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
     // bbport: Metal has no sparse buffers. One ordinary arena covers the start of the guest
     // GPU range instead (runtime_memory.c places guest memory from USER_MIN = 0x7000000000 on
     // macOS); Metal commits its memory as it is touched.
-    // Requests outside it stop in GetArena (docs/MACOS_BACKLOG.md: per-page arenas).
-    const u64 first_page = MacArenaBase >> ARENA_PAGE_BITS;
+    // Requests outside it stop in GetChunk (docs/MACOS_BACKLOG.md: per-page arenas).
     // The arena is sized to the guest memory the game can map, not to the Mac: Metal wires the
     // arena's memory for the GPU again and again, and the bigger it is the worse that gets. With
     // 16 GiB on a 36 GB Mac (M5 Max, macOS 27) the wiring never settled (Metal System Trace:
@@ -90,7 +89,7 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
     // with the retail 5056 MiB of direct memory, every log so far ends its highest mapping at
     // 4.80 GiB. The arena covers direct memory plus 1 GiB (flexible memory, 448 MiB, and room),
     // rounded up to 512 MiB: 6 GiB, or 10 GiB with BB_DMEM_MB=9152 (run.sh's startup patch).
-    // Past it the game stops in GetArena, and "the game reached N GiB" is logged as it grows.
+    // Past it the game stops in GetChunk, and "the game reached N GiB" is logged as it grows.
     // BB_ARENA_GIB (at least 4) overrides: smaller arenas for tools that snapshot every buffer
     // (Metal frame capture fails on large ones), larger ones for testing.
     const char* reason = "the game's direct memory plus 1 GiB";
@@ -147,27 +146,29 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
                                          std::memory_order_relaxed);
     mac_arena_end = MacArenaBase + arena_bytes;
     BbArenaRuns::SetArena(MacArenaBase, mac_arena_end);
-    const auto* arena = &arenas.emplace_back(device, MemoryType::DeviceLocal, MacArenaBase,
-                                             arena_bytes, "Guest Arena");
-    // Every 4 GiB page the arena touches points at it; GetArena checks the end within the last.
-    for (u64 page = 0; page < (arena_bytes + ARENA_PAGE_SIZE - 1) >> ARENA_PAGE_BITS; ++page) {
-        address_space[first_page + page] = arena;
-    }
-    runtime.RegisterHoistTarget(arena, arena_bytes);
-    // Shaders reach the arena by address (page table): resident, and declared on every encoder
+    SetUpChunk(MacArenaBase, arena_bytes, "Guest Arena");
+}
+
+const Buffer* BufferCache::SetUpChunk(VAddr start, u64 bytes, const char* name) {
+    const auto* buffer = &arenas.emplace_back(device, MemoryType::DeviceLocal, start, bytes, name);
+    ASSERT_MSG(chunks.Add(start, start + bytes, buffer),
+               "Guest memory buffer {:#x}+{:#x} overlaps another", start, bytes);
+    runtime.RegisterHoistTarget(buffer, bytes);
+    // Shaders reach guest memory by address (page table): resident, and declared on every encoder
     // (the declaration survives Submit). BB_ARENA_DECLARE=0 leaves the declaration out (an A/B
     // of its CPU cost per encoder; residency alone may be enough without direct memory access).
-    device.MakeResident(arena->Handle());
+    device.MakeResident(buffer->Handle());
     static const bool declare = [] {
         const char* env = std::getenv("BB_ARENA_DECLARE");
         return !env || env[0] != '0';
     }();
     if (declare) {
         scheduler.Record(
-            [buffer = arena->Handle()](Metal::Encoder& e) { e.DeclareIndirect(buffer); });
+            [handle = buffer->Handle()](Metal::Encoder& e) { e.DeclareIndirect(handle); });
     } else {
         std::printf("GPU arena: not declared on encoders (BB_ARENA_DECLARE=0)\n");
     }
+    return buffer;
 }
 
 BufferCache::~BufferCache() = default;
@@ -215,8 +216,8 @@ void BufferCache::ExtendWriteFault(VAddr device_addr) {
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks) {
     // bbport: guest memory the arena does not cover holds no GPU data of this cache (every
     // GPU-modified range was bound through the arena): nothing to read back. A fault there
-    // stopped the game in GetArena before (texture watchers protect pages anywhere).
-    if (!FindArena(device_addr, std::max<u64>(size, 1))) {
+    // stopped the game in GetChunk before (texture watchers protect pages anywhere).
+    if (!FindChunk(device_addr, size)) {
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
@@ -225,9 +226,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         return;
     }
     const auto flush_request = [this, device_addr, size, is_write] {
-        const u32 first_block = device_addr >> block_shift;
-        const u32 last_block = (device_addr + size - 1) >> block_shift;
-        const auto* arena = GetArena(first_block, last_block);
+        const auto* arena = GetChunk(device_addr, size);
         BbArenaRuns::Note(BbArenaRuns::Caller::ReadBack, device_addr, size);
 
         // GPU-modified ranges come as many small scattered islands,
@@ -418,15 +417,15 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         return {&stream_buffer, offset};
     }
     BbArenaRuns::Note(caller, device_addr, size);
-    // bbport: a size-0 request outside the arena, or at its 4 GiB page boundary (an empty range
-    // ending before it starts), stopped the game in GetArena. It reaches no memory: a sink.
-    if (size == 0 && (!FindArena(device_addr, 1) || (device_addr & (ARENA_PAGE_SIZE - 1)) == 0)) {
+    // bbport: a size-0 request outside the guest memory buffers stopped the game in GetChunk. It
+    // reaches no memory: a sink.
+    if (size == 0 && !FindChunk(device_addr, size)) {
         BbStats::size0_sinks.fetch_add(1, std::memory_order_relaxed);
         return {&write_sink, 0};
     }
+    const auto* arena = GetChunk(device_addr, size);
     const u64 first_block = device_addr >> block_shift;
-    const u64 last_block = (device_addr + size - 1) >> block_shift;
-    const auto* arena = GetArena(first_block, last_block);
+    const u64 last_block = (device_addr + std::max<u32>(size, 1) - 1) >> block_shift;
     EnsureResident(arena, first_block, last_block);
     const u64 uploaded_before = BbStats::buffer_upload_bytes.load(std::memory_order_relaxed);
     SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
@@ -465,8 +464,7 @@ std::pair<const Buffer*, u64> BufferCache::LowOffsetRange(VAddr device_addr, u32
         const u64 mb = env ? std::strtoull(env, nullptr, 10) : 0;
         return mb ? std::min<u64>(mb << 20, u64{1} << 32) : u64{1} << 32;
     }();
-    const bool in_arena =
-        std::any_of(arenas.begin(), arenas.end(), [buffer](const Buffer& a) { return &a == buffer; });
+    const bool in_arena = FindChunk(device_addr, size) == buffer;
     if (!in_arena || (offset < limit && size <= limit - offset)) {
         return {buffer, offset};
     }
@@ -545,31 +543,21 @@ void BufferCache::SynchronizeDmaBuffers() {
         return; // BB_DIRECT_MEMORY_ACCESS is off: no shader reaches memory by address
     }
     for (const auto& range : resident_ranges) {
-        const u64 page = range.start >> (ARENA_PAGE_BITS - block_shift);
         const VAddr device_addr = range.start << block_shift;
         const u64 size = (range.end - range.start) << block_shift;
-        SynchronizeMemory(address_space[page], device_addr, size, false, false);
+        SynchronizeMemory(GetChunk(device_addr, size), device_addr, size, false, false);
     }
 }
 
-const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
-    const u64 first_page = first_block >> blocks_per_arena_page_shift;
-    const u64 last_page = last_block >> blocks_per_arena_page_shift;
-    ASSERT_MSG(last_page - first_page <= 1,
-               "Buffer request cannot span more than two VA arena pages");
-    // bbport: an address past the 40-bit table (a garbage address) read out of its bounds.
-    ASSERT_MSG(last_page < NUM_ARENA_PAGES, "GPU buffer {:#x} outside the guest address space",
-               first_block << block_shift);
-
-    const auto* first_arena = address_space[first_page];
-    const auto* last_arena = address_space[last_page];
-    ASSERT_MSG(first_arena && first_arena == last_arena &&
-                   ((last_block + 1) << block_shift) <= mac_arena_end,
+const Buffer* BufferCache::GetChunk(VAddr device_addr, u64 size) {
+    const auto* chunk = chunks.Find(device_addr, size);
+    ASSERT_MSG(chunk,
                "GPU buffer {:#x}..{:#x} outside the macOS guest arena (ends at {:#x}; limited by "
                "this Mac's largest Metal buffer)",
-               first_block << block_shift, ((last_block + 1) << block_shift) - 1, mac_arena_end);
+               device_addr, device_addr + std::max<u64>(size, 1) - 1, mac_arena_end);
     // bbport: how much of the arena the game reaches (the arena's sizing).
-    const u64 end = ((last_block + 1) << block_shift) - MacArenaBase;
+    const u64 end = Common::AlignUp(device_addr + std::max<u64>(size, 1), u64{block_size}) -
+                    MacArenaBase;
     const u64 steps = (end + (256_MB - 1)) / 256_MB;
     u64 seen = arena_high_steps.load(std::memory_order_relaxed);
     while (steps > seen &&
@@ -580,23 +568,12 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
                     double(steps * 256_MB) / double(1_GB),
                     double(mac_arena_end - MacArenaBase) / double(1_GB));
     }
-    return first_arena;
+    return chunk->buffer;
 }
 
-const Buffer* BufferCache::FindArena(VAddr device_addr, u64 size) const {
-    if (size == 0 || device_addr + size < device_addr) {
-        return nullptr;
-    }
-    const u64 first_page = device_addr >> ARENA_PAGE_BITS;
-    const u64 last_page = (device_addr + size - 1) >> ARENA_PAGE_BITS;
-    if (last_page >= NUM_ARENA_PAGES) {
-        return nullptr;
-    }
-    const auto* arena = address_space[first_page];
-    if (!arena || address_space[last_page] != arena || !arena->IsInBounds(device_addr, size)) {
-        return nullptr;
-    }
-    return arena;
+const Buffer* BufferCache::FindChunk(VAddr device_addr, u64 size) const {
+    const auto* chunk = chunks.Find(device_addr, size);
+    return chunk ? chunk->buffer : nullptr;
 }
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {

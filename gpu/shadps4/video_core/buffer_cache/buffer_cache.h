@@ -10,12 +10,16 @@
 #include "bbport_copy.h"
 
 #include <deque>
+#include <mutex>
+#include <span>
+#include <vector>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_copy.h"
+#include "video_core/buffer_cache/chunk_table.h"
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
 
@@ -77,9 +81,10 @@ public:
         return bda_pagetable_buffer.get();
     }
 
-    /// bbport: the arenas (guest memory), for the ordering of address-reached reads.
-    [[nodiscard]] const std::deque<Buffer>& GetArenas() const noexcept {
-        return arenas;
+    /// bbport: the buffers holding guest memory (chunks), for the ordering of address-reached
+    /// reads.
+    [[nodiscard]] std::span<const ChunkTable::Chunk> GetChunks() const noexcept {
+        return chunks.Chunks();
     }
 
     /// Retrieves the fault buffer.
@@ -143,11 +148,17 @@ public:
     void SynchronizeDmaBuffers();
 
 private:
-    const Buffer* GetArena(u64 first_block, u64 last_block);
+    /// bbport: the buffer holding [device_addr, device_addr + size) (a chunk); stops the game when
+    /// none does.
+    const Buffer* GetChunk(VAddr device_addr, u64 size);
 
-    /// bbport: the arena covering [device_addr, device_addr + size), or null (GetArena stops the
+    /// bbport: the chunk holding [device_addr, device_addr + size), or null (GetChunk stops the
     /// game instead). For paths that can decline: read-backs, size-0 requests.
-    const Buffer* FindArena(VAddr device_addr, u64 size) const;
+    const Buffer* FindChunk(VAddr device_addr, u64 size) const;
+
+    /// bbport: creates a buffer holding guest memory [start, start + bytes), sets it up for the GPU
+    /// (resident, upload hoisting, ordering, declared on encoders) and publishes it as a chunk.
+    const Buffer* SetUpChunk(VAddr start, u64 bytes, const char* name);
 
     /// bbport: a range for Metal's 32-bit index and indirect offsets: the arena's when it ends
     /// within the limit, else a copy (`caller`: Index or Indirect, for the counters).
@@ -192,12 +203,13 @@ private:
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
-    /// bbport: bound for size-0 requests the arena does not cover (they stopped the game in
-    /// GetArena); nothing reads it.
+    /// bbport: bound for size-0 requests no chunk covers (they stopped the game in GetChunk);
+    /// nothing reads it.
     Buffer write_sink;
 
-    std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
+    /// bbport: the chunks' buffers (a deque: their addresses stay put) and their lookup table.
     std::deque<Buffer> arenas;
+    ChunkTable chunks;
 
     /// Blocks whose page table entries are filled (the arena itself is fully backed).
     IntervalList<Interval> resident_ranges;
