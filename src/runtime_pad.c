@@ -245,12 +245,17 @@ static void record_sample(const PadData *d) {
     fflush(record_file);
 }
 static PadSample *replay; static size_t replay_count, replay_next;
-/* Benchmark traversal: the replay's clock is the GPU host's presented frames at 60 per second
- * (the fixed timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. */
+/* Benchmark traversal: the replay's clock is the game's own frames at 60 per second (the fixed
+ * timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. The game
+ * reads the pad once per frame (7815 reads for 7815 frames shown on the route), so the read count
+ * is that clock. The GPU host's presented frames lag the game by a varying frame or two: as the
+ * clock they let an input land a frame early or late, and the route split into different paths
+ * after about a minute. */
 static int replay_by_frames;
 static uint64_t replay_start_flips;
+static size_t replay_start_reads;
 static uint32_t replay_ms(void) {
-    if (replay_by_frames) return (uint32_t)((bbgpu_bench_host_flips()-replay_start_flips)*1000/60);
+    if (replay_by_frames) return (uint32_t)((reads-replay_start_reads)*1000/60);
     return (uint32_t)((now_us()-replay_start)/1000);
 }
 static void replay_sample(PadData *d) {
@@ -272,13 +277,18 @@ static void replay_sample(PadData *d) {
         }
         replay_start=now_us();
         replay_start_flips=bbgpu_bench_host_flips();
+        replay_start_reads=reads;
         replay_next=0;
     }
     const uint32_t ms=replay_ms();
     while (replay_next<replay_count && replay[replay_next].ms<=ms) ++replay_next;
     if (!replay_next) return;
     if (replay_next==replay_count && ms>replay[replay_count-1].ms+500) {
-        if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; }
+        if (replay_armed==1) {
+            printf("Runtime: pad replay finished (%zu pad reads, %llu frames shown)\n",reads-replay_start_reads,
+                   (unsigned long long)(bbgpu_bench_host_flips()-replay_start_flips));
+            replay_armed=2;
+        }
         return;
     }
     const PadSample *s=&replay[replay_next-1];

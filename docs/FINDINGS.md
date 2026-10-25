@@ -1885,3 +1885,13 @@ presets (`ultrawide_writes`: scene/UI size, camera aspect, the texture pool abov
 M4 Max, benchmark save in Central Yharnam, upscaler off: both 1920x1200 and 2560x1600 render the
 whole scene at that size ("observed scene depth"), the HUD and item boxes sit correctly, 60 FPS
 at the cap. 2560x1600 gets the under-24 GB memory warning like the 1440p ultrawides.
+
+## 2026-10-25: benchmark route repeatability (replay clock)
+
+The traversal replay stepped by the GPU host's presented frames, which lag the game by a varying
+frame or two. Draw counts per 10 s block (% from a reference run): the first ~50 s always matched,
+later blocks differed by 25-57% in most runs (two or three repeating paths). The game reads the pad
+once per frame (7815 reads = 7815 frames shown), so the replay now counts pad reads. Three runs
+with the new clock (M4 Max, test data): 0-5% in every block. The route file's wall-clock times
+still make the character bump walls/items near spots where the recording hitched (the same way
+every run); re-recording with frame numbers is planned (DESIGN_BENCHMARK "Next").
