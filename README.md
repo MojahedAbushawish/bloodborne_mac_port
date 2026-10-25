@@ -704,12 +704,14 @@ Thank you to everyone who sent pull requests:
   - The upscaler haze fix (#48).
   - Invariant vertex positions, copies held to the end of a render pass, and the loading-screen fix
     (from #20).
+  - Mouse look (#20).
   - Benchmarks on an M3 Pro.
 - **[DiAvisoo](https://github.com/DiAvisoo)**
   - Native ultrawide (#30).
   - Duplicate-launch and game-folder checks (#28).
   - The disappearing-geometry finding (#36).
   - Audio dropout diagnostics (#32).
+  - The launcher's Stop button (#31).
 - **[satperm](https://github.com/satperm)**
   - The About panel and update check (#23).
   - Dated session logs and crash reports (#40).
