@@ -136,8 +136,9 @@ static void sample_host(PadData *d) {
     }
     /* The keyboard works beside a controller: its buttons add to the pad's, and WASD / the arrow
      * keys take over a stick only while held (with a controller connected the keyboard used to be
-     * ignored, so Enter could not press Play Offline). */
-    if (!k) return;
+     * ignored, so Enter could not press Play Offline). While Cmd is held the keys are Mac
+     * shortcuts (Cmd+Q, Cmd+, ...), not game input: Cmd+Q drank a Blood Vial. */
+    if (!k || k[SDL_SCANCODE_LGUI] || k[SDL_SCANCODE_RGUI]) return;
     static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
         {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_RETURN,BTN_CROSS}, {SDL_SCANCODE_KP_ENTER,BTN_CROSS},
         {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_ESCAPE,BTN_CIRCLE},
