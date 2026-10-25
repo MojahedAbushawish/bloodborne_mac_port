@@ -47,6 +47,23 @@ public:
         return address + bytes <= it->end ? &*it : nullptr;
     }
 
+    /// The chunk whose range contains `address`, or null.
+    [[nodiscard]] const Chunk* FindContaining(VAddr address) const noexcept {
+        return Find(address, 1);
+    }
+
+    /// The first chunk starting after `address`, or null.
+    [[nodiscard]] const Chunk* NextAfter(VAddr address) const noexcept {
+        const Table* table = current.load(std::memory_order_acquire);
+        if (!table) {
+            return nullptr;
+        }
+        const auto& chunks = table->chunks;
+        const auto it = std::upper_bound(chunks.begin(), chunks.end(), address,
+                                         [](VAddr a, const Chunk& c) { return a < c.start; });
+        return it != chunks.end() ? &*it : nullptr;
+    }
+
     /// Adds a chunk and publishes the new table. False (nothing changes) when it is empty or
     /// overlaps a chunk.
     bool Add(VAddr start, VAddr end, const Buffer* buffer) {
